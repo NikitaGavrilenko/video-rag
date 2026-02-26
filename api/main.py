@@ -13,6 +13,7 @@ FastAPI сервер с одним endpoint: POST /search
 
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -86,6 +87,19 @@ class SearchResponse(BaseModel):
 def health():
     return {"status": "ok", "scenes_in_db": collection.count()}
 
+@app.get("/video/{slug}")
+def get_video(slug: str):
+    """Отдаёт видеофайл для воспроизведения в браузере."""
+    videos_dir = ROOT / "data" / "videos"
+    for ext in (".mp4", ".mkv", ".avi"):
+        path = videos_dir / f"{slug}{ext}"
+        if path.exists():
+            return FileResponse(
+                path,
+                media_type="video/mp4",
+                headers={"Accept-Ranges": "bytes"}
+            )
+    return {"error": "видео не найдено"}
 
 @app.post("/search", response_model=SearchResponse)
 def search(req: SearchRequest):
@@ -123,7 +137,7 @@ def search(req: SearchRequest):
                 # Превращаем абсолютный путь в URL: /frames/slug/frame_00042.jpg
                 try:
                     rel = Path(frame_path).relative_to(frames_dir)
-                    frame_url = f"/frames/{rel}"
+                    frame_url = f"/frames/{rel.as_posix()}"
                 except ValueError:
                     frame_url = ""
 

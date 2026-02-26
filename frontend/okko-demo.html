@@ -23,7 +23,6 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: var(--bg1); color: var(--text); font-family: var(--font); min-height: 100vh; overflow-x: hidden; }
 
-/* NAV */
 .hdr { position: sticky; top: 0; z-index: 100; background: rgba(12,13,25,0.9); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
 nav { display: flex; align-items: center; gap: 28px; padding: 0 28px; height: 56px; }
 .logo { font-size: 22px; font-weight: 700; color: var(--purple); text-decoration: none; flex-shrink: 0; letter-spacing: -0.5px; }
@@ -37,7 +36,6 @@ nav { display: flex; align-items: center; gap: 28px; padding: 0 28px; height: 56
 .bsub { background: var(--purple); color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; transition: background .15s; }
 .bsub:hover { background: var(--purple-h); }
 
-/* HERO */
 .hero { padding: 52px 28px 36px; }
 .new-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--purple); margin-bottom: 14px; }
 .dot { width: 6px; height: 6px; background: var(--purple); border-radius: 50%; animation: blink 1.8s ease-in-out infinite; }
@@ -46,7 +44,6 @@ h1 { font-size: 34px; font-weight: 600; line-height: 1.2; max-width: 600px; marg
 h1 em { color: var(--purple); font-style: normal; }
 .sub { color: var(--text2); font-size: 15px; max-width: 460px; line-height: 1.55; margin-bottom: 26px; }
 
-/* SEARCH */
 .s-wrap { max-width: 660px; position: relative; }
 .s-in { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 148px 14px 46px; color: var(--text); font: 15px var(--font); outline: none; transition: border-color .2s, background .2s; }
 .s-in::placeholder { color: var(--text3); }
@@ -55,12 +52,10 @@ h1 em { color: var(--purple); font-style: normal; }
 .s-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--purple); color: #fff; border: none; padding: 9px 22px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; transition: background .15s; }
 .s-btn:hover { background: var(--purple-h); }
 
-/* CHIPS */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .chip { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text2); font-size: 13px; padding: 5px 13px; border-radius: 100px; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .chip:hover { background: rgba(127,96,255,.12); border-color: rgba(127,96,255,.3); color: var(--text); }
 
-/* RESULTS */
 .res-wrap { padding: 0 28px 44px; display: none; }
 .sec-hdr { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
 .sec-t { font-size: 17px; font-weight: 600; }
@@ -70,10 +65,9 @@ h1 em { color: var(--purple); font-style: normal; }
 
 .rcard { background: var(--bg2); border-radius: 10px; overflow: hidden; cursor: pointer; transition: transform .2s, box-shadow .2s; animation: up .3s ease both; }
 @keyframes up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-.rcard:nth-child(1){animation-delay:.04s} .rcard:nth-child(2){animation-delay:.08s} .rcard:nth-child(3){animation-delay:.12s} .rcard:nth-child(4){animation-delay:.16s}
 .rcard:hover { transform: translateY(-3px); box-shadow: 0 14px 36px rgba(0,0,0,.45); }
 
-.rposter { position: relative; aspect-ratio: 2/3; background: var(--bg3); overflow: hidden; }
+.rposter { position: relative; aspect-ratio: 16/9; background: var(--bg3); overflow: hidden; }
 .rposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mpill { position: absolute; top: 8px; right: 8px; background: var(--purple); color: #fff; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 100px; }
 .tpill { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.7); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 5px; backdrop-filter: blur(4px); }
@@ -83,9 +77,8 @@ h1 em { color: var(--purple); font-style: normal; }
 .owbtn:hover { background: var(--purple-h); }
 .rinfo { padding: 9px 11px 11px; }
 .rtitle { font-size: 13px; font-weight: 600; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rscene { font-size: 11px; color: var(--text2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rscene { font-size: 11px; color: var(--text2); line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 
-/* CATALOG */
 .cat-wrap { padding: 0 28px 52px; }
 .cat-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; scrollbar-color: var(--bg3) transparent; }
 .ci { flex: 0 0 148px; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform .2s; }
@@ -93,13 +86,13 @@ h1 em { color: var(--purple); font-style: normal; }
 .ci-p { aspect-ratio: 2/3; background: var(--bg3); overflow: hidden; }
 .ci-p img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
-/* MODAL */
 .mbg { position: fixed; inset: 0; background: rgba(0,0,0,.82); backdrop-filter: blur(12px); z-index: 200; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .25s; }
 .mbg.open { opacity: 1; pointer-events: all; }
 .modal { background: var(--bg2); border: 1px solid rgba(255,255,255,.1); border-radius: 14px; width: 500px; max-width: 92vw; overflow: hidden; transform: scale(.94); transition: transform .25s; }
 .mbg.open .modal { transform: scale(1); }
 .mprev { aspect-ratio: 16/9; background: var(--bg3); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.mprev img { width: 100%; height: 100%; object-fit: cover; opacity: .45; }
+.mprev img { width: 100%; height: 100%; object-fit: cover; }
+.mprev .no-frame { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 13px; }
 .mplay { position: absolute; width: 52px; height: 52px; background: var(--purple); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; padding-left: 4px; cursor: pointer; transition: transform .15s, background .15s; }
 .mplay:hover { transform: scale(1.1); background: var(--purple-h); }
 .mbody { padding: 18px 20px 20px; }
@@ -168,7 +161,12 @@ h1 em { color: var(--purple); font-style: normal; }
 
 <div class="mbg" id="mbg" onclick="closeBg(event)">
   <div class="modal">
-    <div class="mprev"><img id="mImg" src="" alt=""><div class="mplay">▶</div></div>
+    <div class="mprev" id="mPrev">
+        <img id="mImg" src="" alt="" style="display:none">
+        <div class="no-frame" id="mNoFrame">Кадр недоступен</div>
+        <div class="mplay" id="mPlayBtn" onclick="watchNow()">▶</div>
+        <video id="mVideo" style="display:none;width:100%;height:100%;object-fit:cover" controls></video>
+    </div>
     <div class="mbody">
       <div class="mtitle" id="mTitle"></div>
       <div class="mmeta" id="mMeta"></div>
@@ -182,21 +180,12 @@ h1 em { color: var(--purple); font-style: normal; }
 </div>
 
 <script>
-const B = 'https://static.okko.tv/images/v4/';
-const P = ['00480119-2eac-4428-9dae-fa2cf67581d9','0098fe98-752f-4f37-aec7-51f1809ad3eb','054887a6-4927-4e70-afff-61f446e5a527','0ba1cf80-1ea6-43e8-b410-5e1b09e02a48','0d0d63d3-fa8f-4f3f-9f5b-8d5b2fb72833','0fa86f71-4781-4b8d-b46e-5a8c894bc8fa','1184a905-7f69-405d-8e18-2976bf659ec0','14ffbddc-7be5-4598-8489-c352b7393a15','184fce8c-3582-449c-a361-0425ba66710c','19d2986a-1ecb-44e0-92d1-5667de51295e','1c67deac-310e-44fb-b0ae-38f76848a0b8','2267863a-d327-40b5-8167-8bab1227dd19','3057a627-2197-4ad3-a83f-b1b3057a1552','32044ac5-1041-4541-9d57-d248e54525c0','3a0d3ee3-93a8-441d-9645-b48dc7b5c7e9'];
-const i = (id,w=280) => `${B}${id}?width=${w}`;
-
-const DATA = {
-  'дождь': [{id:P[0],t:'Амели',m:'2001 · Мелодрама · 2ч 2м',tc:'0:47:12',s:'Амели стоит у окна под дождём, наблюдая за улицей',p:'97%'},{id:P[1],t:'Трудности перевода',m:'2003 · Драма · 1ч 42м',tc:'1:18:30',s:'Герой выходит из отеля под дождём',p:'91%'},{id:P[2],t:'Бегущий по лезвию',m:'1982 · Фантастика · 1ч 57м',tc:'1:49:05',s:'Финальная сцена на крыше под дождём',p:'88%'},{id:P[3],t:'Нотинг Хилл',m:'1999 · Романтика · 2ч 4м',tc:'0:32:47',s:'Встреча под дождём на рынке',p:'85%'}],
-  'погоня': [{id:P[4],t:'Форсаж 7',m:'2015 · Экшн · 2ч 17м',tc:'0:58:22',s:'Ночная погоня по автостраде на суперкарах',p:'96%'},{id:P[5],t:'Драйв',m:'2011 · Триллер · 1ч 40м',tc:'0:12:10',s:'Уход от полиции ночью по улицам Лос-Анджелеса',p:'94%'},{id:P[6],t:'Джон Уик',m:'2014 · Боевик · 1ч 41м',tc:'1:02:33',s:'Погоня на мотоцикле через парковку',p:'87%'}],
-  'звёзды': [{id:P[7],t:'Интерстеллар',m:'2014 · Фантастика · 2ч 49м',tc:'0:28:15',s:'Отец и дочь смотрят на звёздное небо',p:'98%'},{id:P[8],t:'Горбатая гора',m:'2005 · Драма · 2ч 14м',tc:'0:19:44',s:'Двое у костра под звёздным небом в горах',p:'92%'},{id:P[9],t:'Маленький принц',m:'2015 · Анимация · 1ч 48м',tc:'0:44:20',s:'Принц смотрит на звёзды с астероида',p:'89%'}],
-  'крыша': [{id:P[10],t:'Матрица',m:'1999 · Фантастика · 2ч 16м',tc:'1:38:44',s:'Финальная битва Нео и Смита на крыше',p:'95%'},{id:P[11],t:'Мстители',m:'2012 · Экшн · 2ч 23м',tc:'1:44:12',s:'Команда собирается на крыше после победы',p:'90%'}],
-  'default': [{id:P[12],t:'Криминальное чтиво',m:'1994 · Криминал · 2ч 34м',tc:'0:55:18',s:'Напряжённый диалог в закусочной',p:'82%'},{id:P[13],t:'Начало',m:'2010 · Фантастика · 2ч 28м',tc:'1:12:05',s:'Коридор вращается во сне',p:'79%'},{id:P[14],t:'1917',m:'2019 · Военная · 1ч 59м',tc:'0:38:40',s:'Бег через поле под огнём',p:'76%'}]
-};
-
-function fill(el) { document.getElementById('sIn').value = el.textContent; doSearch(); }
-
 const API = 'http://localhost:8000';
+
+function fill(el) {
+  document.getElementById('sIn').value = el.textContent;
+  doSearch();
+}
 
 async function doSearch() {
   const q = document.getElementById('sIn').value.trim();
@@ -216,9 +205,10 @@ async function doSearch() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: q, top_k: 8})
     });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     data = await resp.json();
   } catch(e) {
-    g.innerHTML = '<div style="color:#f66;padding:24px">Ошибка: API недоступен. Запущен ли сервер на порту 8000?</div>';
+    g.innerHTML = `<div style="color:#f66;padding:24px">Ошибка: ${e.message}. Запущен ли сервер на порту 8000?</div>`;
     return;
   }
 
@@ -232,16 +222,29 @@ async function doSearch() {
 
   data.results.forEach((r, n) => {
     const c = document.createElement('div');
-    c.className = 'rcard'; c.style.animationDelay = n*0.05+'s';
-    const frameUrl = r.frame_url ? `${API}${r.frame_url}` : 'https://placehold.co/200x300/1a1a2e/666?text=Кадр';
+    c.className = 'rcard';
+    c.style.animationDelay = n * 0.05 + 's';
+
+    const frameUrl = r.frame_url ? `${API}${r.frame_url}` : '';
     const score = Math.round(r.match_score * 100);
     const desc = r.visual_description || r.subtitle_text || '—';
+    const descShort = desc.substring(0, 80).replace(/'/g, "\\'");
+    const title = r.movie_title.replace(/'/g, "\\'");
+    const frameUrlEsc = frameUrl.replace(/'/g, "\\'");
+
     c.innerHTML = `
       <div class="rposter">
-        <img src="${frameUrl}" loading="lazy" onerror="this.src='https://placehold.co/200x300/1a1a2e/666?text=Кадр'">
+        <img src="${frameUrl}"
+             loading="lazy"
+             onerror="this.style.display='none'"
+             ${frameUrl ? '' : 'style="display:none"'}>
         <div class="mpill">${score}%</div>
         <div class="tpill">⏱ ${r.timecode_str}</div>
-        <div class="rover"><button class="owbtn" onclick="openM(event,'','${r.movie_title.replace(/'/g,"\\'")}','','${r.timecode_str}','${desc.substring(0,80).replace(/'/g,"\\'")}')">▶ Смотреть с этого момента</button></div>
+        <div class="rover">
+          <button class="owbtn" onclick="openM(event,'${title}','${r.movie_slug}',${r.timecode_seconds},'${r.timecode_str}','${descShort}','${frameUrlEsc}')">
+            ▶ Смотреть с этого момента
+          </button>
+        </div>
       </div>
       <div class="rinfo">
         <div class="rtitle">${r.movie_title}</div>
@@ -250,33 +253,86 @@ async function doSearch() {
     g.appendChild(c);
   });
 
-  w.scrollIntoView({behavior:'smooth', block:'start'});
+  w.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-// Catalog
+// Каталог — плейсхолдеры
 const cr = document.getElementById('catRow');
-P.slice(0,12).forEach(id => {
-  const el = document.createElement('div'); el.className='ci';
-  el.innerHTML=`<div class="ci-p"><img src="${i(id,180)}" loading="lazy"></div>`;
+for (let i = 0; i < 12; i++) {
+  const el = document.createElement('div');
+  el.className = 'ci';
+  el.innerHTML = `<div class="ci-p" style="background:hsl(${240 + i*8},30%,20%)"></div>`;
   cr.appendChild(el);
-});
+}
 
-// Modal
-let cur = {};
-function openM(e,id,t,m,tc,s) {
-  e.stopPropagation(); cur={id,t,tc};
-  document.getElementById('mImg').src = i(id,600);
-  document.getElementById('mTitle').textContent = t;
-  document.getElementById('mMeta').textContent = m;
-  document.getElementById('mTime').textContent = tc;
-  document.getElementById('mScene').textContent = s;
+// Модалка
+let curTimecode = '';
+
+function openM(e, title, slug, seconds, timecode, scene, frameUrl) {
+  e.stopPropagation();
+  curTimecode = timecode;
+
+  const img = document.getElementById('mImg');
+  const noFrame = document.getElementById('mNoFrame');
+
+  if (frameUrl) {
+    img.src = frameUrl;
+    img.style.display = 'block';
+    noFrame.style.display = 'none';
+    img.onerror = () => {
+      img.style.display = 'none';
+      noFrame.style.display = 'flex';
+    };
+  } else {
+    img.style.display = 'none';
+    noFrame.style.display = 'flex';
+  }
+
+  const titleEl = document.getElementById('mTitle');
+  titleEl.textContent = title;
+  titleEl.dataset.slug = slug;
+  titleEl.dataset.seconds = seconds;
+  document.getElementById('mMeta').textContent = '';
+  document.getElementById('mTime').textContent = timecode;
+  document.getElementById('mScene').textContent = scene;
   document.getElementById('mbg').classList.add('open');
 }
-function closeBg(e) { if(e.target===document.getElementById('mbg')) closeMod(); }
-function closeMod() { document.getElementById('mbg').classList.remove('open'); }
-function watchNow() { closeMod(); alert(`▶ Открываем «${cur.t}» с момента ${cur.tc}`); }
 
-document.getElementById('sIn').addEventListener('keydown', e => { if(e.key==='Enter') doSearch(); });
+function closeBg(e) {
+  if (e.target === document.getElementById('mbg')) closeMod();
+}
+
+function closeMod() {
+  document.getElementById('mbg').classList.remove('open');
+  const video = document.getElementById('mVideo');
+  video.pause();
+  video.src = '';
+  video.style.display = 'none';
+  document.getElementById('mPlayBtn').style.display = 'flex';
+}
+
+function watchNow() {
+  const slug = document.getElementById('mTitle').dataset.slug;
+  const seconds = parseFloat(document.getElementById('mTitle').dataset.seconds || 0);
+  
+  const img = document.getElementById('mImg');
+  const noFrame = document.getElementById('mNoFrame');
+  const playBtn = document.getElementById('mPlayBtn');
+  const video = document.getElementById('mVideo');
+
+  img.style.display = 'none';
+  noFrame.style.display = 'none';
+  playBtn.style.display = 'none';
+  video.style.display = 'block';
+
+  video.src = `${API}/video/${slug}#t=${seconds}`;
+  video.currentTime = seconds;
+  video.play();
+}
+
+document.getElementById('sIn').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
 </script>
 </body>
 </html>
