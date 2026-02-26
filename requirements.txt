@@ -1,0 +1,10 @@
+yt-dlp
+ffmpeg-python
+faster-whisper
+chromadb
+sentence-transformers
+ollama
+fastapi
+uvicorn
+Pillow
+tqdm

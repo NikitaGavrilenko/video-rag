@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Data (большие файлы)
+data/videos/
+data/frames/
+data/chroma_db/
+
+# Модели
+*.bin
+*.pt
+*.onnx
+
+# Системное
+.env
+.DS_Store
+Thumbs.db
