@@ -31,10 +31,8 @@ nav { display: flex; align-items: center; gap: 28px; padding: 0 28px; height: 56
 .nav-links a:hover, .nav-links a.act { color: var(--text); }
 .nav-links a.new { color: var(--purple); font-weight: 500; }
 .nav-r { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.ni { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--text2); cursor: pointer; font-size: 17px; transition: background .15s, color .15s; }
-.ni:hover { background: rgba(255,255,255,0.07); color: var(--text); }
-.bsub { background: var(--purple); color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; transition: background .15s; }
-.bsub:hover { background: var(--purple-h); }
+.ni { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--text2); cursor: pointer; font-size: 17px; }
+.bsub { background: var(--purple); color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; }
 
 .hero { padding: 52px 28px 36px; }
 .new-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--purple); margin-bottom: 14px; }
@@ -45,11 +43,11 @@ h1 em { color: var(--purple); font-style: normal; }
 .sub { color: var(--text2); font-size: 15px; max-width: 460px; line-height: 1.55; margin-bottom: 26px; }
 
 .s-wrap { max-width: 660px; position: relative; }
-.s-in { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 148px 14px 46px; color: var(--text); font: 15px var(--font); outline: none; transition: border-color .2s, background .2s; }
+.s-in { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 148px 14px 46px; color: var(--text); font: 15px var(--font); outline: none; transition: border-color .2s; }
 .s-in::placeholder { color: var(--text3); }
-.s-in:focus { border-color: rgba(127,96,255,.45); background: #23243a; }
+.s-in:focus { border-color: rgba(127,96,255,.45); }
 .s-ico { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--text3); font-size: 16px; pointer-events: none; }
-.s-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--purple); color: #fff; border: none; padding: 9px 22px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; transition: background .15s; }
+.s-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--purple); color: #fff; border: none; padding: 9px 22px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; }
 .s-btn:hover { background: var(--purple-h); }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -66,35 +64,38 @@ h1 em { color: var(--purple); font-style: normal; }
 .rcard { background: var(--bg2); border-radius: 10px; overflow: hidden; cursor: pointer; transition: transform .2s, box-shadow .2s; animation: up .3s ease both; }
 @keyframes up { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
 .rcard:hover { transform: translateY(-3px); box-shadow: 0 14px 36px rgba(0,0,0,.45); }
-
 .rposter { position: relative; aspect-ratio: 16/9; background: var(--bg3); overflow: hidden; }
 .rposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mpill { position: absolute; top: 8px; right: 8px; background: var(--purple); color: #fff; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 100px; }
-.tpill { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.7); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 5px; backdrop-filter: blur(4px); }
+.tpill { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,.7); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 5px; }
 .rover { position: absolute; inset: 0; background: linear-gradient(to top, rgba(12,13,25,.95) 0%, rgba(12,13,25,.1) 55%, transparent 100%); display: flex; flex-direction: column; justify-content: flex-end; padding: 10px; opacity: 0; transition: opacity .2s; }
 .rcard:hover .rover { opacity: 1; }
 .owbtn { background: var(--purple); color: #fff; border: none; width: 100%; padding: 9px; border-radius: 7px; font: 600 12px var(--font); cursor: pointer; }
 .owbtn:hover { background: var(--purple-h); }
 .rinfo { padding: 9px 11px 11px; }
 .rtitle { font-size: 13px; font-weight: 600; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rscene { font-size: 11px; color: var(--text2); line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.rscene { font-size: 11px; color: var(--text2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .cat-wrap { padding: 0 28px 52px; }
-.cat-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; scrollbar-color: var(--bg3) transparent; }
+.cat-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
 .ci { flex: 0 0 148px; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform .2s; }
 .ci:hover { transform: scale(1.03); }
-.ci-p { aspect-ratio: 2/3; background: var(--bg3); overflow: hidden; }
-.ci-p img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ci-p { aspect-ratio: 2/3; }
 
+/* MODAL */
 .mbg { position: fixed; inset: 0; background: rgba(0,0,0,.82); backdrop-filter: blur(12px); z-index: 200; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .25s; }
 .mbg.open { opacity: 1; pointer-events: all; }
-.modal { background: var(--bg2); border: 1px solid rgba(255,255,255,.1); border-radius: 14px; width: 500px; max-width: 92vw; overflow: hidden; transform: scale(.94); transition: transform .25s; }
+.modal { background: var(--bg2); border: 1px solid rgba(255,255,255,.1); border-radius: 14px; width: 560px; max-width: 92vw; overflow: hidden; transform: scale(.94); transition: transform .25s; }
 .mbg.open .modal { transform: scale(1); }
-.mprev { aspect-ratio: 16/9; background: var(--bg3); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.mprev img { width: 100%; height: 100%; object-fit: cover; }
-.mprev .no-frame { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 13px; }
-.mplay { position: absolute; width: 52px; height: 52px; background: var(--purple); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; padding-left: 4px; cursor: pointer; transition: transform .15s, background .15s; }
+
+.mprev { position: relative; aspect-ratio: 16/9; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.mprev img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+#mVideo { position: absolute; inset: 0; width: 100%; height: 100%; display: none; background: #000; }
+.mplay { position: relative; z-index: 2; width: 56px; height: 56px; background: var(--purple); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; padding-left: 4px; cursor: pointer; transition: transform .15s, background .15s; flex-shrink: 0; }
 .mplay:hover { transform: scale(1.1); background: var(--purple-h); }
+.mloading { position: absolute; inset: 0; z-index: 3; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; color: var(--text2); font-size: 14px; }
+.merror { position: absolute; inset: 0; z-index: 3; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #f66; font-size: 13px; text-align: center; padding: 16px; }
+
 .mbody { padding: 18px 20px 20px; }
 .mtitle { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
 .mmeta { color: var(--text2); font-size: 13px; margin-bottom: 12px; }
@@ -103,7 +104,7 @@ h1 em { color: var(--purple); font-style: normal; }
 .macts { display: flex; gap: 9px; }
 .bwnow { flex: 1; background: var(--purple); color: #fff; border: none; padding: 12px; border-radius: 8px; font: 600 13px var(--font); cursor: pointer; transition: background .15s; }
 .bwnow:hover { background: var(--purple-h); }
-.bcancel { background: rgba(255,255,255,.07); border: 1px solid var(--border); color: var(--text2); padding: 12px 16px; border-radius: 8px; font: 14px var(--font); cursor: pointer; transition: background .15s; }
+.bcancel { background: rgba(255,255,255,.07); border: 1px solid var(--border); color: var(--text2); padding: 12px 16px; border-radius: 8px; font: 14px var(--font); cursor: pointer; }
 .bcancel:hover { background: rgba(255,255,255,.11); }
 </style>
 </head>
@@ -159,13 +160,18 @@ h1 em { color: var(--purple); font-style: normal; }
   <div class="cat-row" id="catRow"></div>
 </section>
 
+<!-- MODAL -->
 <div class="mbg" id="mbg" onclick="closeBg(event)">
   <div class="modal">
-    <div class="mprev" id="mPrev">
-        <img id="mImg" src="" alt="" style="display:none">
-        <div class="no-frame" id="mNoFrame">Кадр недоступен</div>
-        <div class="mplay" id="mPlayBtn" onclick="watchNow()">▶</div>
-        <video id="mVideo" style="display:none;width:100%;height:100%;object-fit:cover" controls></video>
+    <div class="mprev">
+      <img id="mImg" src="" alt="">
+      <video id="mVideo" controls></video>
+      <div class="mloading" id="mLoading">⏳ Загружаем видео...</div>
+      <div class="merror" id="mError">
+        <span>⚠️ Не удалось загрузить видео</span>
+        <span style="color:var(--text3);font-size:11px">Проверь что файл лежит в data/videos/</span>
+      </div>
+      <div class="mplay" id="mPlayBtn" onclick="watchNow()">▶</div>
     </div>
     <div class="mbody">
       <div class="mtitle" id="mTitle"></div>
@@ -181,6 +187,7 @@ h1 em { color: var(--purple); font-style: normal; }
 
 <script>
 const API = 'http://localhost:8000';
+let curScene = {};
 
 function fill(el) {
   document.getElementById('sIn').value = el.textContent;
@@ -193,8 +200,7 @@ async function doSearch() {
 
   const g = document.getElementById('resGrid');
   g.innerHTML = '<div style="color:#aaa;padding:24px">Ищем...</div>';
-  const w = document.getElementById('resWrap');
-  w.style.display = 'block';
+  document.getElementById('resWrap').style.display = 'block';
   document.getElementById('resT').textContent = `По запросу «${q}»`;
   document.getElementById('resC').textContent = '';
 
@@ -216,7 +222,7 @@ async function doSearch() {
   g.innerHTML = '';
 
   if (!data.results.length) {
-    g.innerHTML = '<div style="color:#aaa;padding:24px">Ничего не найдено. Попробуй другой запрос.</div>';
+    g.innerHTML = '<div style="color:#aaa;padding:24px">Ничего не найдено.</div>';
     return;
   }
 
@@ -228,32 +234,38 @@ async function doSearch() {
     const frameUrl = r.frame_url ? `${API}${r.frame_url}` : '';
     const score = Math.round(r.match_score * 100);
     const desc = r.visual_description || r.subtitle_text || '—';
-    const descShort = desc.substring(0, 80).replace(/'/g, "\\'");
-    const title = r.movie_title.replace(/'/g, "\\'");
-    const frameUrlEsc = frameUrl.replace(/'/g, "\\'");
 
     c.innerHTML = `
       <div class="rposter">
-        <img src="${frameUrl}"
-             loading="lazy"
-             onerror="this.style.display='none'"
-             ${frameUrl ? '' : 'style="display:none"'}>
+        <img src="${frameUrl}" loading="lazy" onerror="this.style.display='none'" ${!frameUrl ? 'style="display:none"' : ''}>
         <div class="mpill">${score}%</div>
         <div class="tpill">⏱ ${r.timecode_str}</div>
         <div class="rover">
-          <button class="owbtn" onclick="openM(event,'${title}','${r.movie_slug}',${r.timecode_seconds},'${r.timecode_str}','${descShort}','${frameUrlEsc}')">
-            ▶ Смотреть с этого момента
-          </button>
+          <button class="owbtn">▶ Смотреть с этого момента</button>
         </div>
       </div>
       <div class="rinfo">
         <div class="rtitle">${r.movie_title}</div>
         <div class="rscene">${desc.substring(0, 120)}</div>
       </div>`;
+
+    // Передаём данные через замыкание — никаких проблем с экранированием строк
+    c.querySelector('.owbtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openModal({
+        title: r.movie_title,
+        slug: r.movie_slug,
+        seconds: r.timecode_seconds,
+        timecode: r.timecode_str,
+        desc: desc.substring(0, 120),
+        frameUrl: frameUrl,
+      });
+    });
+
     g.appendChild(c);
   });
 
-  w.scrollIntoView({behavior: 'smooth', block: 'start'});
+  document.getElementById('resWrap').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 // Каталог — плейсхолдеры
@@ -261,41 +273,76 @@ const cr = document.getElementById('catRow');
 for (let i = 0; i < 12; i++) {
   const el = document.createElement('div');
   el.className = 'ci';
-  el.innerHTML = `<div class="ci-p" style="background:hsl(${240 + i*8},30%,20%)"></div>`;
+  el.innerHTML = `<div class="ci-p" style="background:hsl(${240 + i * 10},25%,18%)"></div>`;
   cr.appendChild(el);
 }
 
-// Модалка
-let curTimecode = '';
+// --- МОДАЛКА ---
 
-function openM(e, title, slug, seconds, timecode, scene, frameUrl) {
-  e.stopPropagation();
-  curTimecode = timecode;
+function openModal(scene) {
+  curScene = scene;
+
+  resetPlayer();
 
   const img = document.getElementById('mImg');
-  const noFrame = document.getElementById('mNoFrame');
-
-  if (frameUrl) {
-    img.src = frameUrl;
+  if (scene.frameUrl) {
+    img.src = scene.frameUrl;
     img.style.display = 'block';
-    noFrame.style.display = 'none';
-    img.onerror = () => {
-      img.style.display = 'none';
-      noFrame.style.display = 'flex';
-    };
+    img.onerror = () => { img.style.display = 'none'; };
   } else {
     img.style.display = 'none';
-    noFrame.style.display = 'flex';
   }
 
-  const titleEl = document.getElementById('mTitle');
-  titleEl.textContent = title;
-  titleEl.dataset.slug = slug;
-  titleEl.dataset.seconds = seconds;
+  document.getElementById('mTitle').textContent = scene.title;
   document.getElementById('mMeta').textContent = '';
-  document.getElementById('mTime').textContent = timecode;
-  document.getElementById('mScene').textContent = scene;
+  document.getElementById('mTime').textContent = scene.timecode;
+  document.getElementById('mScene').textContent = scene.desc;
+
   document.getElementById('mbg').classList.add('open');
+}
+
+function watchNow() {
+  const video = document.getElementById('mVideo');
+  const playBtn = document.getElementById('mPlayBtn');
+  const loading = document.getElementById('mLoading');
+  const errBox = document.getElementById('mError');
+  const img = document.getElementById('mImg');
+  const seconds = parseFloat(curScene.seconds || 0);
+
+  img.style.display = 'none';
+  playBtn.style.display = 'none';
+  errBox.style.display = 'none';
+  loading.style.display = 'flex';
+  video.style.display = 'block';
+
+  const videoUrl = `${API}/video/${encodeURIComponent(curScene.slug)}`;
+  video.src = videoUrl;
+
+  video.onloadedmetadata = () => {
+    loading.style.display = 'none';
+    video.currentTime = seconds;
+    video.play().catch(() => {});
+  };
+
+  video.onerror = () => {
+    loading.style.display = 'none';
+    video.style.display = 'none';
+    errBox.style.display = 'flex';
+    console.error(`Не удалось загрузить: ${videoUrl}`);
+  };
+}
+
+function resetPlayer() {
+  const video = document.getElementById('mVideo');
+  video.pause();
+  video.removeAttribute('src');
+  video.onloadedmetadata = null;
+  video.onerror = null;
+  video.style.display = 'none';
+
+  document.getElementById('mPlayBtn').style.display = 'flex';
+  document.getElementById('mLoading').style.display = 'none';
+  document.getElementById('mError').style.display = 'none';
 }
 
 function closeBg(e) {
@@ -303,35 +350,15 @@ function closeBg(e) {
 }
 
 function closeMod() {
+  resetPlayer();
   document.getElementById('mbg').classList.remove('open');
-  const video = document.getElementById('mVideo');
-  video.pause();
-  video.src = '';
-  video.style.display = 'none';
-  document.getElementById('mPlayBtn').style.display = 'flex';
-}
-
-function watchNow() {
-  const slug = document.getElementById('mTitle').dataset.slug;
-  const seconds = parseFloat(document.getElementById('mTitle').dataset.seconds || 0);
-  
-  const img = document.getElementById('mImg');
-  const noFrame = document.getElementById('mNoFrame');
-  const playBtn = document.getElementById('mPlayBtn');
-  const video = document.getElementById('mVideo');
-
-  img.style.display = 'none';
-  noFrame.style.display = 'none';
-  playBtn.style.display = 'none';
-  video.style.display = 'block';
-
-  video.src = `${API}/video/${slug}#t=${seconds}`;
-  video.currentTime = seconds;
-  video.play();
 }
 
 document.getElementById('sIn').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeMod();
 });
 </script>
 </body>

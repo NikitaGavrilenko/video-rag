@@ -1,36 +1,30 @@
 """
+api/main.py
 -----------
-FastAPI сервер с одним endpoint: POST /search
+FastAPI сервер.
 
 Запуск:
     uvicorn main:app --reload --port 8000
-
-Пример запроса:
-    curl -X POST http://localhost:8000/search \
-         -H "Content-Type: application/json" \
-         -d '{"query": "герой стоит под дождём и плачет", "top_k": 5}'
 """
 
 from pathlib import Path
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-# ─── Пути ────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent.parent
 CHROMA_DIR = ROOT / "data" / "chroma_db"
-FRONTEND_DIR = ROOT / "frontend"
+FRAMES_DIR = ROOT / "data" / "frames"
+VIDEOS_DIR = ROOT / "data" / "videos"
 
-# ─── Настройки ────────────────────────────────────────────────────────────────
 EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 COLLECTION_NAME = "video_scenes"
 
-# ─── Инициализация (один раз при старте) ─────────────────────────────────────
 print("[startup] загружаем модель эмбеддингов ...")
 embed_model = SentenceTransformer(EMBED_MODEL)
 
@@ -42,10 +36,8 @@ collection = chroma_client.get_or_create_collection(
 )
 print(f"[startup] в БД {collection.count()} сцен")
 
-# ─── FastAPI ──────────────────────────────────────────────────────────────────
 app = FastAPI(title="Okko Video RAG", version="1.0")
 
-# Разрешаем CORS — чтобы фронт мог обращаться к API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -53,27 +45,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Раздаём статику (кадры фильмов) — фронт показывает превью сцены
-frames_dir = ROOT / "data" / "frames"
-if frames_dir.exists():
-    app.mount("/frames", StaticFiles(directory=str(frames_dir)), name="frames")
+if FRAMES_DIR.exists():
+    app.mount("/frames", StaticFiles(directory=str(FRAMES_DIR)), name="frames")
 
 
-# ─── Схемы запросов/ответов ───────────────────────────────────────────────────
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
-    movie_filter: str | None = None  # фильтр по конкретному фильму (опционально)
+    movie_filter: str | None = None
 
 
 class SceneResult(BaseModel):
     movie_title: str
+    movie_slug: str
     timecode_str: str
     timecode_seconds: float
     visual_description: str
     subtitle_text: str
-    frame_url: str        # URL превью кадра
-    match_score: float    # 0..1, чем выше — тем лучше совпадение
+    frame_url: str
+    match_score: float
 
 
 class SearchResponse(BaseModel):
@@ -82,36 +72,19 @@ class SearchResponse(BaseModel):
     total_scenes_in_db: int
 
 
-# ─── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok", "scenes_in_db": collection.count()}
 
-@app.get("/video/{slug}")
-def get_video(slug: str):
-    """Отдаёт видеофайл для воспроизведения в браузере."""
-    videos_dir = ROOT / "data" / "videos"
-    for ext in (".mp4", ".mkv", ".avi"):
-        path = videos_dir / f"{slug}{ext}"
-        if path.exists():
-            return FileResponse(
-                path,
-                media_type="video/mp4",
-                headers={"Accept-Ranges": "bytes"}
-            )
-    return {"error": "видео не найдено"}
 
 @app.post("/search", response_model=SearchResponse)
 def search(req: SearchRequest):
-    # Создаём эмбеддинг запроса
     query_embedding = embed_model.encode(req.query).tolist()
 
-    # Фильтр по фильму (если задан)
     where = None
     if req.movie_filter:
         where = {"movie_slug": req.movie_filter}
 
-    # Ищем в ChromaDB
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(req.top_k, collection.count() or 1),
@@ -119,30 +92,25 @@ def search(req: SearchRequest):
         include=["documents", "metadatas", "distances"],
     )
 
-    # Формируем ответ
     scenes = []
     if results["ids"][0]:
         for i, scene_id in enumerate(results["ids"][0]):
             meta = results["metadatas"][0][i]
             distance = results["distances"][0][i]
-
-            # ChromaDB возвращает косинусное расстояние (0=идеально, 2=противоположно)
-            # Конвертируем в score 0..1
             match_score = round(1 - distance / 2, 3)
 
-            # Строим URL к превью кадра
             frame_path = meta.get("frame_path", "")
             frame_url = ""
             if frame_path:
-                # Превращаем абсолютный путь в URL: /frames/slug/frame_00042.jpg
                 try:
-                    rel = Path(frame_path).relative_to(frames_dir)
+                    rel = Path(frame_path).relative_to(FRAMES_DIR)
                     frame_url = f"/frames/{rel.as_posix()}"
                 except ValueError:
                     frame_url = ""
 
             scenes.append(SceneResult(
                 movie_title=meta.get("movie_title", ""),
+                movie_slug=meta.get("movie_slug", ""),
                 timecode_str=meta.get("timecode_str", ""),
                 timecode_seconds=meta.get("timecode_seconds", 0),
                 visual_description=meta.get("visual_description", ""),
@@ -160,7 +128,6 @@ def search(req: SearchRequest):
 
 @app.get("/movies")
 def list_movies():
-    """Список всех проиндексированных фильмов."""
     all_meta = collection.get(include=["metadatas"])
     movies = {}
     for meta in all_meta["metadatas"]:
@@ -168,6 +135,29 @@ def list_movies():
         if slug and slug not in movies:
             movies[slug] = meta.get("movie_title", slug)
     return {"movies": movies}
+
+
+@app.get("/video/{slug}")
+def get_video(slug: str):
+    """Отдаёт видеофайл для воспроизведения в браузере."""
+    for ext in (".mp4", ".mkv", ".avi", ".MP4", ".MKV", ".AVI"):
+        path = VIDEOS_DIR / f"{slug}{ext}"
+        if path.exists():
+            return FileResponse(
+                str(path),
+                media_type="video/mp4",
+                headers={"Accept-Ranges": "bytes"},
+            )
+    # Ищем файл с похожим именем (на случай расхождения slug)
+    if VIDEOS_DIR.exists():
+        for f in VIDEOS_DIR.iterdir():
+            if f.stem.lower().replace(" ", "_") == slug.lower():
+                return FileResponse(
+                    str(f),
+                    media_type="video/mp4",
+                    headers={"Accept-Ranges": "bytes"},
+                )
+    raise HTTPException(status_code=404, detail=f"Видео не найдено: {slug}")
 
 
 if __name__ == "__main__":
