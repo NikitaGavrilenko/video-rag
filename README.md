@@ -1,40 +1,59 @@
-# Video RAG — Поиск фильмов по сцене (для Okko)
+# Video RAG — Поиск по сценам
+
+Три режима поиска:
+- **По описанию** — CLIP (мультиязычный) + multilingual-e5, мёрдж результатов
+- **По скриншоту** — CLIP image encoder → похожие кадры
+- **Вопрос о фильме** — RAG: e5 → находим сцены → Groq llama-4 → текстовый ответ
 
 ## Установка
 
 ```bash
 pip install -r requirements.txt
-ollama pull llava        # ~4GB, один раз
 ```
 
-## Быстрый старт
+Создай `.env`:
+```
+GROQ_API_KEY=ваш_ключ_с_console.groq.com
+```
 
-### 1. Проиндексировать фильм
+## Пайплайн (один раз на фильм)
 
 ```bash
-# Из YouTube (трейлер или полный фильм)
-python run_pipeline.py --url "https://youtu.be/XXXX" --title "Амели"
-
-# Из локального файла
-python run_pipeline.py --file /path/to/amelie.mp4 --title "Амели"
+python run_pipeline.py --file "data/videos/amelie.mp4" --title "Амели"
 ```
 
-Пайплайн по шагам:
-1. `extract_frames.py` — скачивает видео, нарезает кадры (1 / 15 сек)
-2. `describe_frames.py` — LLaVA описывает каждый кадр на русском
-3. `transcribe.py`      — Whisper транскрибирует аудио
-4. `build_scenes.py`    — объединяет всё, создаёт эмбеддинги → ChromaDB
+Шаги:
+1. `extract_frames.py`  — кадры через FFmpeg (каждые 15 сек)
+2. `describe_frames.py` — описания через Groq Vision (llama-4)
+3. `transcribe.py`      — субтитры через faster-whisper
+4. `embed_clip.py`      — CLIP image embeddings → коллекция `clip_visual`
+5. `build_scenes.py`    — e5 text embeddings → коллекции `text_visual`, `text_subtitles`
 
-### 2. Запустить API
+Флаги для пропуска уже выполненных шагов:
+```bash
+python run_pipeline.py --file "..." --title "..." --skip-describe --skip-transcribe
+```
+
+## Запуск API
 
 ```bash
-cd api
-uvicorn main:app --reload --port 8000
+cd api && uvicorn main:app --reload --port 8000
 ```
 
-### 3. Открыть демо
+## Фронтенд
 
 Открыть `frontend/okko-demo.html` в браузере.
+
+## API эндпоинты
+
+```
+POST /search         { query, top_k, movie_filter? }
+POST /search/image   multipart/form-data: file + top_k
+POST /qa             { question, movie_filter? }
+GET  /movies
+GET  /health
+GET  /video/{slug}
+```
 
 ## Структура данных
 
@@ -44,26 +63,12 @@ data/
 │   └── амели.mp4
 ├── frames/
 │   └── амели/
-│       ├── frame_00001.jpg
-│       ├── metadata.json      # таймкоды кадров
-│       ├── descriptions.json  # описания от LLaVA
-│       └── subtitles.json     # субтитры от Whisper
-└── chroma_db/                 # векторная БД
+│       ├── frame_00001.jpg ...
+│       ├── metadata.json
+│       ├── descriptions.json
+│       └── subtitles.json
+└── chroma_db/
+    ├── clip_visual/       ← CLIP image embeddings (512d)
+    ├── text_visual/       ← e5 описания + субтитры (768d)
+    └── text_subtitles/    ← e5 реплики (768d)
 ```
-
-## API
-
-```
-POST /search
-{ "query": "герой стоит под дождём", "top_k": 5 }
-
-GET  /movies   — список проиндексированных фильмов
-GET  /health   — статус и количество сцен в БД
-```
-
-## Советы для хакатона
-
-- Индексируй заранее, LLaVA ~8 сек/кадр на CPU
-- Для 10 трейлеров (5 мин каждый) ≈ 200 кадров ≈ 30 мин
-- Если нет GPU — используй `--whisper-model tiny` для скорости
-- `--skip-describe` если хочешь проверить поиск только по субтитрам

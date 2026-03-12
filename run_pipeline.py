@@ -1,15 +1,13 @@
 """
-run_pipeline.py
----------------
-Запускает весь пайплайн для одного фильма.
+run_pipeline.py — запускает весь пайплайн для одного фильма.
 
 Использование:
-    python run_pipeline.py --file "C:/фильмы/аватар.mp4" --title "Аватар 3"
-    python run_pipeline.py --file "D:/movies/amelie.mkv" --title "Амели"
+    python run_pipeline.py --file "data/videos/amelie.mp4" --title "Амели"
 
-Флаги для пропуска шагов (если уже выполнены):
-    --skip-describe     пропустить описание кадров LLaVA
-    --skip-transcribe   пропустить транскрипцию Whisper
+Флаги для пропуска шагов:
+    --skip-describe    пропустить Groq описания (если уже есть)
+    --skip-transcribe  пропустить Whisper (если уже есть)
+    --skip-clip        пропустить CLIP embeddings (если уже есть)
 """
 
 import argparse
@@ -22,53 +20,46 @@ INDEXER = Path(__file__).parent / "indexer"
 
 def run(script: str, args: list):
     cmd = [sys.executable, str(INDEXER / script)] + args
-    print(f"\n▶ {' '.join(cmd)}\n")
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"\n[error] Шаг завершился с ошибкой.")
-        sys.exit(result.returncode)
+    print(f"\n▶  {' '.join(str(a) for a in cmd)}\n{'─'*60}")
+    r = subprocess.run(cmd)
+    if r.returncode != 0:
+        print(f"\n[error] шаг завершился с ошибкой: {script}")
+        sys.exit(r.returncode)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True, help="Путь к mp4/mkv/avi файлу")
-    parser.add_argument("--title", required=True, help="Название фильма")
-    parser.add_argument("--interval", type=int, default=15,
-                        help="Секунд между кадрами (default: 15)")
-    parser.add_argument("--skip-describe", action="store_true")
-    parser.add_argument("--skip-transcribe", action="store_true")
-    parser.add_argument("--whisper-model", default="small",
-                        help="tiny/small/medium/large-v2")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--file", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--interval", type=int, default=15)
+    p.add_argument("--whisper-model", default="small")
+    p.add_argument("--skip-describe", action="store_true")
+    p.add_argument("--skip-transcribe", action="store_true")
+    p.add_argument("--skip-clip", action="store_true")
+    args = p.parse_args()
 
     if not Path(args.file).exists():
-        print(f"[error] Файл не найден: {args.file}")
+        print(f"[error] файл не найден: {args.file}")
         sys.exit(1)
 
-    print(f"\n{'='*60}")
-    print(f"  Video RAG Pipeline: {args.title}")
-    print(f"{'='*60}")
+    print(f"\n{'='*60}\n  Video RAG Pipeline: {args.title}\n{'='*60}")
 
-    # Шаг 1: кадры
-    run("extract_frames.py", ["--file", args.file, "--title", args.title,
-                               "--interval", str(args.interval)])
+    run("extract_frames.py",  ["--file", args.file, "--title", args.title, "--interval", str(args.interval)])
 
-    # Шаг 2: описания LLaVA
     if not args.skip_describe:
         run("describe_frames.py", ["--title", args.title])
 
-    # Шаг 3: субтитры Whisper
     if not args.skip_transcribe:
         run("transcribe.py", ["--title", args.title, "--model", args.whisper_model])
 
-    # Шаг 4: сборка сцен + ChromaDB
+    if not args.skip_clip:
+        run("embed_clip.py", ["--title", args.title])
+
     run("build_scenes.py", ["--title", args.title])
 
-    print(f"\n{'='*60}")
-    print(f"  ✓ Готово: {args.title}")
-    print(f"{'='*60}")
-    print(f"\n  Запусти API:")
-    print(f"  cd api && uvicorn main:app --reload --port 8000")
+    print(f"\n{'='*60}\n  ✓ Готово: {args.title}\n{'='*60}")
+    print("\n  Запусти API:")
+    print("  cd api && uvicorn main:app --reload --port 8000\n")
 
 
 if __name__ == "__main__":
