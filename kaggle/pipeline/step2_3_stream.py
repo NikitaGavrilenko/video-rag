@@ -61,6 +61,9 @@ SIMPLE_PROMPT = (
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 
+# Videos where CUDA hwaccel failed — skip CUDA on subsequent scenes.
+_cuda_blacklist: set[str] = set()
+
 # Per-scene tracking dict.  Each value is a dict with optional keys
 # "keyframe_path" and "asr_text".  When both are present the scene is ready.
 extraction_ready: dict[str, dict[str, str]] = {}
@@ -146,10 +149,17 @@ def _extract_keyframe(
         "-q:v", "2",
         str(out_path),
     ]
-    # Skip CUDA hwaccel for webm (VP8/VP9 not supported by NVDEC)
-    use_cuda = video_path.suffix.lower() not in (".webm",)
-    hwaccel_args = ["-hwaccel", "cuda"] if use_cuda else []
-    cmd = ["ffmpeg"] + hwaccel_args + base_args
+    # Try CUDA hwaccel first; remember failures per video to avoid retrying
+    use_cuda = str(video_path) not in _cuda_blacklist
+    if use_cuda:
+        cmd = ["ffmpeg", "-hwaccel", "cuda"] + base_args
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if result.returncode == 0:
+            return out_path
+        _cuda_blacklist.add(str(video_path))
+
+    # CPU fallback
+    cmd = ["ffmpeg"] + base_args
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
     if result.returncode != 0:
         raise RuntimeError(
