@@ -149,16 +149,7 @@ def _extract_keyframe(
         "-q:v", "2",
         str(out_path),
     ]
-    # Try CUDA hwaccel first; remember failures per video to avoid retrying
-    use_cuda = str(video_path) not in _cuda_blacklist
-    if use_cuda:
-        cmd = ["ffmpeg", "-hwaccel", "cuda"] + base_args
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        if result.returncode == 0:
-            return out_path
-        _cuda_blacklist.add(str(video_path))
-
-    # CPU fallback
+    # CPU-only: avoid GPU contention with vLLM
     cmd = ["ffmpeg"] + base_args
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
     if result.returncode != 0:
