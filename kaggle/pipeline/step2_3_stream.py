@@ -406,8 +406,9 @@ def vlm_consumer(
                 continue
 
             image = Image.open(kf_path).convert("RGB")
-            if asr_text.strip():
-                text_prompt = VLM_PROMPT_TEMPLATE.format(asr_text=asr_text)
+            asr_trimmed = asr_text.strip()[:2000]  # cap to avoid exceeding 4096 tokens
+            if asr_trimmed:
+                text_prompt = VLM_PROMPT_TEMPLATE.format(asr_text=asr_trimmed)
             else:
                 text_prompt = SIMPLE_PROMPT
 

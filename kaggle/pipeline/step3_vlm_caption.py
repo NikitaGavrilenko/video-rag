@@ -98,7 +98,7 @@ def main() -> None:
         for key in batch_keys:
             ext = extractions[key]
             image = Image.open(ext["keyframe_path"]).convert("RGB")
-            asr_text = ext.get("asr_text", "").strip()
+            asr_text = ext.get("asr_text", "").strip()[:2000]  # cap to avoid exceeding 4096 tokens
 
             if asr_text:
                 text_prompt = VLM_PROMPT_TEMPLATE.format(asr_text=asr_text)
