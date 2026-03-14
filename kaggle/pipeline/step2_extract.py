@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import (
+    ASR_OVERLAP_SEC,
     AUDIO_DIR,
     KEYFRAMES_DIR,
     SHOTS_FILE,
@@ -222,10 +223,13 @@ def transcribe_all(
                 scene_idx: int = scene["scene_idx"]
                 sc_start: float = scene["start"]
                 sc_end: float = scene["end"]
+                # Expand scene window to capture ASR from neighboring scenes
+                asr_start = max(0.0, sc_start - ASR_OVERLAP_SEC)
+                asr_end = sc_end + ASR_OVERLAP_SEC
 
                 matched_texts: list[str] = []
                 for seg in segments:
-                    if _overlap_fraction(seg["start"], seg["end"], sc_start, sc_end) > 0.5:
+                    if _overlap_fraction(seg["start"], seg["end"], asr_start, asr_end) > 0.5:
                         text = seg["text"].strip()
                         if text:
                             matched_texts.append(text)
