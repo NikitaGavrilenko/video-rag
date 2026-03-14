@@ -268,6 +268,11 @@ def search(query: str, top_n: int = FINAL_TOP_N) -> list[dict]:
 app = FastAPI(title="Video RAG Demo API", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# фронт обращается к /frames/{video_id}/scene_XXXX.jpg
+if KEYFRAMES_DIR.exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/frames", StaticFiles(directory=str(KEYFRAMES_DIR)), name="frames")
+
 
 class SearchRequest(BaseModel):
     query: str
@@ -279,18 +284,29 @@ def search_endpoint(req: SearchRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Пустой запрос")
     results = search(req.query, top_n=req.top_k)
+
+    def fmt_tc(seconds: float) -> str:
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
     return {
         "query": req.query,
         "results": [
             {
-                "video_id": r["video_id"],
-                "scene_idx": r.get("scene_idx"),
-                "start": r["start"],
+                # поля совместимые с okko-demo.html
+                "movie_title": r["video_id"],
+                "movie_slug": r["video_id"],
+                "timecode_str": fmt_tc(r["start"]),
+                "timecode_seconds": r["start"],
+                "visual_description": r.get("text", ""),
+                "subtitle_text": "",
+                "frame_url": f"/keyframes/{r['video_id']}/{r.get('scene_idx', 0)}",
+                "match_score": round(r.get("reranker_score", r.get("rrf_score", 0.0)), 4),
+                "scene_type": "visual",
+                # дополнительно
                 "end": r["end"],
-                "timecode": f"{int(r['start']//60):02d}:{int(r['start']%60):02d}",
-                "score": round(r.get("reranker_score", r.get("rrf_score", 0.0)), 4),
-                "summary": r.get("text", ""),
-                "keyframe_url": f"/keyframes/{r['video_id']}/{r.get('scene_idx', 0)}",
+                "scene_idx": r.get("scene_idx"),
             }
             for r in results
         ],
