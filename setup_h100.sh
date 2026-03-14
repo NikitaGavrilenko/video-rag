@@ -16,7 +16,7 @@ pip install --break-system-packages kaggle
 echo "=== [3/5] Setting up Kaggle credentials ==="
 mkdir -p ~/.kaggle
 if [ ! -f ~/.kaggle/kaggle.json ]; then
-    echo '{"username":"ark2016","key":"7d32721715927387e329638c776cd2be"}' > ~/.kaggle/kaggle.json
+    echo '{"username":"ark2016","key":""}' > ~/.kaggle/kaggle.json
     chmod 600 ~/.kaggle/kaggle.json
 fi
 

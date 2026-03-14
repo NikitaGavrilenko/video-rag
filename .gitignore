@@ -4,9 +4,12 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+*.json
+*.pkl
 
 # Data (большие файлы)
 data/videos/
+data/audio/
 data/frames/
 data/chroma_db/
 
@@ -21,10 +24,6 @@ data/chroma_db/
 Thumbs.db
 
 
-data/videos/
-data/audio/
-*.json
+
+
 !data/shot_boundaries_schema.json
-*.pkl
-__pycache__/
-.venv/
