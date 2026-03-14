@@ -32,7 +32,7 @@ WHISPER_BATCH_SIZE = 16
 ASR_OVERLAP_SEC = 1.5  # расширение окна сцены для захвата ASR из соседних сцен
 
 # ── VLM Captioning ─────────────────────────────────────────────────────────
-VLM_MODEL = "Qwen/Qwen3-VL-8B"
+VLM_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 VLM_MAX_TOKENS = 256
 VLM_BATCH_SIZE = 256
 VLM_TENSOR_PARALLEL = 1  # single GPU sufficient for 8B
