@@ -20,7 +20,6 @@ from .config import (
     VLM_PROMPT_TEMPLATE,
     VLM_TENSOR_PARALLEL,
     WORK_DIR,
-    SHOTS_FILE,
 )
 
 CAPTIONS_FILE = WORK_DIR / "captions.json"
@@ -49,9 +48,6 @@ def _build_multimodal_input(image: Image.Image, text_prompt: str) -> dict:
 
 def main() -> None:
     # ── Load inputs ──────────────────────────────────────────────────────
-    with open(SHOTS_FILE, "r", encoding="utf-8") as f:
-        shots: dict = json.load(f)
-
     with open(EXTRACTIONS_FILE, "r", encoding="utf-8") as f:
         extractions: dict[str, dict] = json.load(f)
 

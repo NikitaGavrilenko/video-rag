@@ -205,7 +205,7 @@ class Searcher:
                 if not line:
                     continue
                 doc = json.loads(line)
-                key = f"{doc['video_id']}_{doc['scene_idx']}"
+                key = f"{doc['video_id']}__{doc['scene_idx']}"
                 self._scene_lookup[key] = doc
 
     # -- Encode ------------------------------------------------------------
@@ -253,7 +253,7 @@ class Searcher:
                 "source": source_label,
                 "center_scene_idx": doc.get("center_scene_idx"),
                 "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", doc.get("summary", "")),
+                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
             })
         return results
 
@@ -285,7 +285,7 @@ class Searcher:
                 "source": source_label,
                 "center_scene_idx": doc.get("center_scene_idx"),
                 "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", doc.get("summary", "")),
+                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
             })
         return results
 
@@ -315,7 +315,7 @@ class Searcher:
                 "source": source_label,
                 "center_scene_idx": doc.get("center_scene_idx"),
                 "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", doc.get("summary", "")),
+                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
             })
         return results
 
@@ -327,7 +327,7 @@ class Searcher:
         if center_idx is None:
             return result
 
-        key = f"{result['video_id']}_{center_idx}"
+        key = f"{result['video_id']}__{center_idx}"
         scene = self._scene_lookup.get(key)
         if scene:
             result = result.copy()
