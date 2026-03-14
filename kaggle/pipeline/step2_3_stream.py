@@ -146,14 +146,12 @@ def _extract_keyframe(
         "-q:v", "2",
         str(out_path),
     ]
-    # Try CUDA hwaccel first; fall back to CPU for unsupported codecs (e.g. VP8/VP9 in webm)
-    for hwaccel in (["-hwaccel", "cuda"], []):
-        cmd = ["ffmpeg"] + hwaccel + base_args
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        if result.returncode == 0:
-            return out_path
-        if hwaccel:
-            continue  # retry without hwaccel
+    # Skip CUDA hwaccel for webm (VP8/VP9 not supported by NVDEC)
+    use_cuda = video_path.suffix.lower() not in (".webm",)
+    hwaccel_args = ["-hwaccel", "cuda"] if use_cuda else []
+    cmd = ["ffmpeg"] + hwaccel_args + base_args
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg failed for {video_path} @ {keyframe_time}s: "
             f"{result.stderr.decode(errors='replace')[:500]}"
