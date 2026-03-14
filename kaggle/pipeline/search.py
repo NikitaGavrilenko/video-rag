@@ -163,15 +163,10 @@ class Searcher:
         train_csv = Path("/kaggle/input/competitions/multi-lingual-video-fragment-retrieval-challenge/video-rag/train/train_qa.csv")
         self.qp = QueryPreprocessor(str(train_csv) if train_csv.exists() else None, use_sage=False)
 
-        # -- FAISS GPU indices ------------------------------------------------
-        print("[search] Loading FAISS indices to GPU ...")
-        res = faiss.StandardGpuResources()
-        self.faiss_scenes = faiss.index_cpu_to_gpu(
-            res, 0, faiss.read_index(str(FAISS_SCENES_INDEX)),
-        )
-        self.faiss_events = faiss.index_cpu_to_gpu(
-            res, 0, faiss.read_index(str(FAISS_EVENTS_INDEX)),
-        )
+        # -- FAISS indices (CPU — fast enough for ~30K vectors) ----------------
+        print("[search] Loading FAISS indices ...")
+        self.faiss_scenes = faiss.read_index(str(FAISS_SCENES_INDEX))
+        self.faiss_events = faiss.read_index(str(FAISS_EVENTS_INDEX))
 
         # -- Metadata ---------------------------------------------------------
         print("[search] Loading metadata ...")

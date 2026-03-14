@@ -63,20 +63,12 @@ def _encode(
 
 
 def _build_faiss_index(vectors: np.ndarray) -> faiss.Index:
-    """Build a FAISS IndexFlatIP on GPU, then return as CPU index for saving."""
+    """Build a FAISS IndexFlatIP (CPU — fast enough for ~30K vectors)."""
     dim = vectors.shape[1]
-    cpu_index = faiss.IndexFlatIP(dim)
-
-    print(f"  Moving index (dim={dim}) to GPU...")
-    res = faiss.StandardGpuResources()
-    gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
-
-    print(f"  Adding {vectors.shape[0]} vectors...")
-    gpu_index.add(vectors.astype(np.float32))
-
-    print("  Moving index back to CPU for saving...")
-    cpu_index = faiss.index_gpu_to_cpu(gpu_index)
-    return cpu_index
+    index = faiss.IndexFlatIP(dim)
+    print(f"  Adding {vectors.shape[0]} vectors (dim={dim})...")
+    index.add(vectors.astype(np.float32))
+    return index
 
 
 def _build_scene_metadata(docs: list[dict]) -> list[dict]:
