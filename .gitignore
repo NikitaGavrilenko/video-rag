@@ -19,3 +19,12 @@ data/chroma_db/
 .env
 .DS_Store
 Thumbs.db
+
+
+data/videos/
+data/audio/
+*.json
+!data/shot_boundaries_schema.json
+*.pkl
+__pycache__/
+.venv/

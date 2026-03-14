@@ -28,6 +28,7 @@ from groq import Groq
 from PIL import Image
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
+import requests as _requests
 
 load_dotenv()
 
@@ -67,7 +68,6 @@ clip_col = chroma.get_or_create_collection(CLIP_COLLECTION, metadata={"hnsw:spac
 tv_col = chroma.get_or_create_collection(TEXT_VISUAL_COLLECTION, metadata={"hnsw:space": "cosine"})
 ts_col = chroma.get_or_create_collection(TEXT_SUBS_COLLECTION, metadata={"hnsw:space": "cosine"})
 
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 print(f"[startup] готово. CLIP: {clip_col.count()}, text_visual: {tv_col.count()}, subtitles: {ts_col.count()}")
 
@@ -218,11 +218,16 @@ def qa(req: QARequest):
     """
     QA: вопрос → найти релевантные сцены → Groq llama-4 → текстовый ответ + ссылки.
     """
-    if not groq_client.api_key:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY не задан")
-
+    print(f"[qa] вопрос: {req.question}")
     # Находим релевантные сцены через e5
-    e5_emb = e5_model.encode("query: " + req.question, normalize_embeddings=True, convert_to_numpy=True).tolist()
+    # Расширяем запрос
+    expanded = expand_query(req.question)
+    print(f"[qa] expanded: {expanded}")
+    search_text = req.question + "\n" + expanded
+    print(f"[qa] expanded queries:\n{expanded}")
+
+    e5_emb = e5_model.encode("query: " + search_text, normalize_embeddings=True, convert_to_numpy=True).tolist()
+    print(f"[qa] embedding готов")
     tv_res = query_collection(tv_col, e5_emb, QA_TOP_K, req.movie_filter)
     ts_res = query_collection(ts_col, e5_emb, QA_TOP_K, req.movie_filter)
     all_scenes = dedup_by_timecode([scene_to_dict(s) for s in tv_res + ts_res])[:QA_TOP_K]
@@ -250,17 +255,24 @@ def qa(req: QARequest):
         "В конце ответа укажи: [Источники: Сцена N, Сцена M, ...]"
     )
 
-    response = groq_client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Контекст:\n{context}\n\nВопрос: {req.question}"},
-        ],
-        max_tokens=600,
-        temperature=0.3,
+    resp = _requests.post("https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "arcee-ai/trinity-large-preview:free",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Контекст:\n{context}\n\nВопрос: {req.question}"},
+            ],
+            "max_tokens": 600,
+            "temperature": 0.3,
+        },
+        timeout=60,
     )
-
-    answer = response.choices[0].message.content.strip()
+    print(resp.json())
+    answer = resp.json()["choices"][0]["message"]["content"].strip()
 
     return {
         "question": req.question,
@@ -268,6 +280,36 @@ def qa(req: QARequest):
         "sources": all_scenes,
     }
 
+def expand_query(question: str) -> str:
+    """LLM переформулирует вопрос в поисковые ключевые слова."""
+    resp = _requests.post("https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY')}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "arcee-ai/trinity-large-preview:free",
+            "messages": [{"role": "user", "content": 
+                f"""Вопрос о фильме: «{question}»
+                Что спрашивает пользователь? Перефразируй это как 3-4 коротких поисковых запроса.
+                Запросы должны описывать то, что можно УВИДЕТЬ на экране или УСЛЫШАТЬ в диалоге.
+
+                Пример:
+                Вопрос: «Почему Джейк согласился на миссию?»
+                Запросы:
+                тебе предлагают работу
+                сядь в кресло
+                ты нужен нам
+                деньги операция ноги
+
+                Теперь для вопроса выше. Только запросы, каждый с новой строки."""
+            }],
+            "max_tokens": 200,
+        },
+        timeout=30,
+    )
+    print(resp.json())
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 @app.get("/video/{slug}")
 def get_video(slug: str):
