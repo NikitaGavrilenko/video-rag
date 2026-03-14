@@ -137,10 +137,8 @@ def _extract_keyframe(
     scale_filter = (
         f"scale='if(gte(iw,ih),{max_side},-2)':'if(gte(iw,ih),-2,{max_side})'"
     )
-    cmd = [
-        "ffmpeg",
+    base_args = [
         "-y",
-        "-hwaccel", "cuda",
         "-ss", str(keyframe_time),
         "-i", str(video_path),
         "-frames:v", "1",
@@ -148,8 +146,14 @@ def _extract_keyframe(
         "-q:v", "2",
         str(out_path),
     ]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-    if result.returncode != 0:
+    # Try CUDA hwaccel first; fall back to CPU for unsupported codecs (e.g. VP8/VP9 in webm)
+    for hwaccel in (["-hwaccel", "cuda"], []):
+        cmd = ["ffmpeg"] + hwaccel + base_args
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if result.returncode == 0:
+            return out_path
+        if hwaccel:
+            continue  # retry without hwaccel
         raise RuntimeError(
             f"ffmpeg failed for {video_path} @ {keyframe_time}s: "
             f"{result.stderr.decode(errors='replace')[:500]}"
