@@ -18,8 +18,8 @@ def _load_json(path: Path) -> dict | list:
 
 def main() -> None:
     shots: list[dict] = _load_json(SHOTS_FILE)
-    extractions: dict[str, str] = _load_json(WORK_DIR / "extractions.json")
-    captions: dict[str, str] = _load_json(WORK_DIR / "captions.json")
+    extractions: dict[str, dict] = _load_json(WORK_DIR / "extractions.json")
+    captions: dict[str, dict] = _load_json(WORK_DIR / "captions.json")
 
     count = 0
     with open(SCENES_FILE, "w", encoding="utf-8") as out:

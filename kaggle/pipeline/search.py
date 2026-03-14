@@ -6,11 +6,13 @@ and BM25 (rank_bm25) instead of Elasticsearch.
 
 Flow:
   1. Query -> BGE-M3 encode (dense + sparse)
-  2. Parallel search across 4 channels:
+  2. Parallel search across 6 channels:
      a. FAISS scenes dense
      b. FAISS events dense
      c. BM25 scenes (asr_text)
-     d. Sparse vector matching on scenes
+     d. BM25 events (event_summary)
+     e. Sparse vector matching on scenes
+     f. Sparse vector matching on events
   3. RRF merge across all channels
   4. Dedup by (video_id, overlapping timecodes) — IoU > 50 %
   5. BGE reranker: rerank top RERANKER_TOP_K -> keep RERANKER_OUTPUT_K
@@ -345,10 +347,10 @@ class Searcher:
         dense_vec = encoded["dense"]
         sparse_vec = encoded["sparse"]
 
-        # 2. Parallel search across 4 channels
+        # 2. Parallel search across 6 channels
         ranked_lists: list[list[dict[str, Any]]] = []
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             futures = {
                 pool.submit(
                     self._faiss_dense_search,
@@ -366,10 +368,20 @@ class Searcher:
                     query, SEARCH_TOP_K_SPARSE, "bm25_scenes",
                 ): "scenes_bm25",
                 pool.submit(
+                    self._bm25_search,
+                    self.bm25_events, self.events_meta,
+                    query, SEARCH_TOP_K_SPARSE, "bm25_events",
+                ): "events_bm25",
+                pool.submit(
                     self._sparse_search,
                     sparse_vec, self.sparse_scenes, self.scenes_meta,
                     SEARCH_TOP_K_SPARSE, "sparse_scenes",
                 ): "scenes_sparse",
+                pool.submit(
+                    self._sparse_search,
+                    sparse_vec, self.sparse_events, self.events_meta,
+                    SEARCH_TOP_K_SPARSE, "sparse_events",
+                ): "events_sparse",
             }
             for future in as_completed(futures):
                 ranked_lists.append(future.result())
