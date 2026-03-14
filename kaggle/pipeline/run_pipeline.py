@@ -7,13 +7,14 @@ Steps:
   3. VLM captioning          (step3_vlm_caption)
   4. Scene documents         (step4_scene_docs)
   5. Event documents         (step5_event_docs)
-  6. Indexing                (step6_index)
+  6. Indexing                (step6_index: BGE-M3 + FAISS-GPU + BM25)
   7. Search / submission     (search)
 
 Usage:
   python -m kaggle.pipeline.run_pipeline
   python -m kaggle.pipeline.run_pipeline --skip-shots --skip-extract
   python -m kaggle.pipeline.run_pipeline --search-only
+  python -m kaggle.pipeline.run_pipeline --stream          # streaming producer-consumer (step2+3 merged)
 """
 
 from __future__ import annotations
@@ -52,11 +53,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--skip-index", action="store_true",
-        help="Skip step 6 (Elasticsearch indexing)",
+        help="Skip step 6 (FAISS-GPU + BM25 indexing)",
     )
     parser.add_argument(
         "--search-only", action="store_true",
         help="Skip all offline steps, only run search to generate submission.csv",
+    )
+    parser.add_argument(
+        "--stream", action="store_true",
+        help="Use streaming producer-consumer pipeline (merges step 2+3): "
+             "keyframes and Whisper run as producers, VLM consumes in batches",
     )
     args = parser.parse_args()
 
@@ -70,19 +76,28 @@ def main() -> None:
         else:
             print("\n[skip] Step 1: Shot detection")
 
-        # Step 2: Parallel extraction (keyframes + ASR)
-        if not args.skip_extract:
-            from .step2_extract import main as step2_main
-            _run_step("Step 2: Parallel extraction (keyframes + ASR)", step2_main)
+        if args.stream:
+            # Streaming mode: steps 2+3 merged into producer-consumer pipeline
+            if not args.skip_extract:
+                from .step2_3_stream import main as stream_main
+                _run_step("Steps 2+3: Streaming extraction + VLM captioning", stream_main)
+            else:
+                print("\n[skip] Steps 2+3: Streaming extraction + VLM captioning")
         else:
-            print("\n[skip] Step 2: Parallel extraction")
+            # Sequential mode: step 2 then step 3
+            # Step 2: Parallel extraction (keyframes + ASR)
+            if not args.skip_extract:
+                from .step2_extract import main as step2_main
+                _run_step("Step 2: Parallel extraction (keyframes + ASR)", step2_main)
+            else:
+                print("\n[skip] Step 2: Parallel extraction")
 
-        # Step 3: VLM captioning
-        if not args.skip_vlm:
-            from .step3_vlm_caption import main as step3_main
-            _run_step("Step 3: VLM captioning", step3_main)
-        else:
-            print("\n[skip] Step 3: VLM captioning")
+            # Step 3: VLM captioning
+            if not args.skip_vlm:
+                from .step3_vlm_caption import main as step3_main
+                _run_step("Step 3: VLM captioning", step3_main)
+            else:
+                print("\n[skip] Step 3: VLM captioning")
 
         # Step 4: Scene documents
         from .step4_scene_docs import main as step4_main
@@ -95,9 +110,9 @@ def main() -> None:
         # Step 6: Indexing
         if not args.skip_index:
             from .step6_index import main as step6_main
-            _run_step("Step 6: Elasticsearch indexing", step6_main)
+            _run_step("Step 6: FAISS-GPU + BM25 indexing", step6_main)
         else:
-            print("\n[skip] Step 6: Elasticsearch indexing")
+            print("\n[skip] Step 6: FAISS-GPU + BM25 indexing")
 
     # Step 7: Search / submission
     from .search import main as search_main
