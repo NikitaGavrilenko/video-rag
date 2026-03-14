@@ -25,7 +25,7 @@ EVENTS_FILE = WORK_DIR / "events.jsonl"
 MIN_SHOT_DURATION = 2.0  # секунды, фильтр микрошотов
 
 # ── Whisper ASR ─────────────────────────────────────────────────────────────
-WHISPER_MODEL = "large-v3"
+WHISPER_MODEL = "large-v3-turbo"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"  # H100 supports bf16/fp16
 WHISPER_BATCH_SIZE = 16
