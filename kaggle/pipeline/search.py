@@ -155,6 +155,14 @@ class Searcher:
         print("[search] Loading reranker ...")
         self.reranker = FlagReranker(RERANKER_MODEL, use_fp16=True)
 
+        # -- Query preprocessor -------------------------------------------
+        print("[search] Loading query preprocessor ...")
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from preproc.query_preprocessor import QueryPreprocessor
+        train_csv = Path("/kaggle/input/competitions/multi-lingual-video-fragment-retrieval-challenge/video-rag/train/train_qa.csv")
+        self.qp = QueryPreprocessor(str(train_csv) if train_csv.exists() else None, use_sage=False)
+
         # -- FAISS GPU indices ------------------------------------------------
         print("[search] Loading FAISS indices to GPU ...")
         res = faiss.StandardGpuResources()
@@ -343,7 +351,8 @@ class Searcher:
         Returns list of {video_file, start, end, score}.
         """
         # 1. Encode query
-        encoded = self._encode_query(query)
+        clean_query = self.qp(query)
+        encoded = self._encode_query(clean_query)
         dense_vec = encoded["dense"]
         sparse_vec = encoded["sparse"]
 
