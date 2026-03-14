@@ -1,6 +1,3 @@
-Понял, читаю контекст чата. Вот новый README:
-
-```markdown
 # Video RAG — Семантический поиск по видеофрагментам
 
 Система для поиска точных временных отрезков в видео по текстовому запросу.
@@ -13,57 +10,106 @@ Kaggle: MultiLingual Video Fragment Retrieval Challenge
 
 ## Архитектура
 
-### Офлайн (предобработка на сервере)
-1. **TransNetV2** — детекция границ шотов по видеоряду
-2. **Whisper Large-v3** — транскрипция аудио с точными таймкодами
-3. **Shot-aligned сегментация** — границы шота = границы чанка
-4. **e5-large** → FAISS index (семантический поиск)
-5. **BM25** index (точные цитаты и ключевые слова)
-6. **BGE-M3 reranker** — cross-encoder для финального ранжирования
+### Офлайн пайплайн (Kaggle, H100)
+
+```
+Video → TransNetV2 (shot detection) → ~20-25K сцен
+         ├── ffmpeg keyframes (CPU)       ─┐
+         └── faster-whisper large-v3 (GPU) ─┤→ Qwen3-VL-8B (vLLM, мультимодальный caption)
+                                            ↓
+                                     Scene Documents (JSONL)
+                                            ↓
+                                     Event Documents (sliding window 5 сцен)
+                                            ↓
+                                     BGE-M3 (dense + sparse) → FAISS-GPU + BM25
+```
 
 ### Инференс
+
 ```
-Запрос → Query expansion (LLM) → FAISS + BM25 параллельно
-→ Merge (RRF) → BGE-M3 rerank top-20 → Top-5 сегментов
+Запрос → BGE-M3 embed → 4 канала параллельно:
+  ├── scenes: BM25 (asr_text) top-50
+  ├── scenes: dense vector top-50
+  ├── events: BM25 (summary) top-50
+  └── events: dense vector top-50
+→ RRF merge → dedup (IoU > 0.5) → bge-reranker-v2-m3 (top-100 → top-10) → top-5
 ```
 
 ### Две версии системы
 
-| | Kaggle | Бизнес (Okko) |
+| | Kaggle (pipeline/) | Бизнес (business/) |
 |---|---|---|
 | Цель | Максимальная метрика | Инференс < 1 сек |
-| Транскрипция | Whisper Large-v3 | faster-whisper |
-| Reranker | BGE-M3 cross-encoder | нет |
-| Query expansion | LLM (Groq) | нет |
-| Индекс | FAISS + BM25 | FAISS + BM25 |
+| Транскрипция | Whisper Large-v3 | faster-whisper small |
+| VLM | Qwen3-VL-8B (vLLM) | Groq Vision API |
+| Embedding | BGE-M3 (dense+sparse) | multilingual-e5 |
+| Индекс | FAISS-GPU + BM25 in-memory | ChromaDB |
+| Reranker | bge-reranker-v2-m3 | нет |
+| Search | 4-channel hybrid + RRF | CLIP + e5 merge |
 
 ## Структура репозитория
 
 ```
 video-rag/
 ├── kaggle/
-│   ├── 1_transnetv2_shots.ipynb     # границы шотов из видео
-│   ├── 2_whisper_transcribe.ipynb   # транскрипция Whisper Large-v3
-│   ├── 3_describe_scenes.ipynb      # описания сцен через LLM (опц.)
-│   ├── 4_build_index.ipynb          # e5-large + BM25 → FAISS
-│   └── 5_inference.ipynb            # поиск + submission.csv
+│   ├── pipeline/                       # Production pipeline (H100)
+│   │   ├── config.py                   # пути, константы, параметры моделей
+│   │   ├── step1_shots.py              # TransNetV2 + merge teammate JSON + фильтр микрошотов
+│   │   ├── step2_extract.py            # параллельно: ffmpeg keyframes + faster-whisper ASR
+│   │   ├── step3_vlm_caption.py        # Qwen3-VL-8B через vLLM (мультимодальный caption)
+│   │   ├── step4_scene_docs.py         # сборка scene documents (JSONL)
+│   │   ├── step5_event_docs.py         # sliding window events
+│   │   ├── step6_index.py              # BGE-M3 embedding → FAISS-GPU + BM25
+│   │   ├── search.py                   # hybrid search + reranker → submission.csv
+│   │   └── run_pipeline.py             # оркестратор всех шагов
+│   ├── 1_transnetv2_shots.ipynb        # legacy notebook (shot detection)
+│   ├── 2_whisper_transcribe.ipynb      # legacy notebook (ASR)
+│   └── 5_inference.ipynb               # legacy notebook (e5 + BM25 baseline)
 │
 ├── business/
-│   ├── indexer/
-│   │   ├── extract_frames.py        # FFmpeg, кадры каждые 15 сек
-│   │   ├── transcribe.py            # faster-whisper
-│   │   ├── build_index.py           # e5 + BM25 → FAISS
-│   │   └── run_pipeline.py          # запуск всего пайплайна
-│   ├── api/
-│   │   └── main.py                  # FastAPI: /search, /search/image, /qa
-│   ├── frontend/
-│   │   └── okko-demo.html           # UI в стиле Okko
+│   ├── api/api/main.py                 # FastAPI: /search, /search/image, /qa
+│   ├── indexer/run_pipeline.py         # пайплайн индексации для бизнес-версии
+│   ├── frontend/okko-demo.html         # UI в стиле Okko
 │   └── requirements.txt
 │
-├── preproc/                         # Предобработка пользовательских данных
+├── preproc/
+│   └── query_preprocessor.py           # 3-stage query cleaning (rules → SymSpell → SAGE)
 │
 └── data/
-    └── shot_boundaries_schema.json  # Контракт формата между участниками
+    └── shot_boundaries_schema.json     # контракт формата между участниками
+```
+
+## Запуск Kaggle Pipeline (H100)
+
+```bash
+# Полный пайплайн
+python -m kaggle.pipeline.run_pipeline
+
+# С пропуском шагов (если данные уже есть)
+python -m kaggle.pipeline.run_pipeline --skip-shots --skip-extract
+
+# Только поиск (офлайн шаги уже выполнены)
+python -m kaggle.pipeline.run_pipeline --search-only
+```
+
+### Бюджет GPU (H100, ~21GB / 96GB)
+
+| Модель | VRAM | Время |
+|---|---|---|
+| faster-whisper large-v3 | ~3GB | ~8-10 мин |
+| Qwen3-VL-8B (vLLM, batch 64) | ~16GB | ~25-40 мин |
+| BGE-M3 embeddings | ~2GB | ~3-5 мин |
+
+## Запуск бизнес-версии
+
+```bash
+pip install -r business/requirements.txt
+
+# Индексация видео
+python business/indexer/run_pipeline.py --file "data/videos/film.mp4" --title "Название"
+
+# API сервер
+cd business/api && uvicorn api.main:app --reload --port 8000
 ```
 
 ## Формат данных между участниками
@@ -80,62 +126,23 @@ video-rag/
         "scene_idx": 0,
         "start": 0.0,
         "end": 18.4,
-        "description": null,
-        "description_en": null,
-        "keyframe_time": 9.2,
-        "keyframe_path": null
+        "keyframe_time": 9.2
       }
     ]
   }
 ]
 ```
 
-## Разделение задач
-
-| Участник | Задача |
-|---|---|
-|  | TransNetV2 — границы шотов |
-| ? | Whisper Large-v3 — транскрипция |
-| ? | Описания сцен через LLM (Groq Vision) |
-| ? | Индексация + инференс + сабмит |
-
-## Установка (бизнес-версия)
-
-```bash
-pip install -r business/requirements.txt
-```
-
-Создай `.env`:
-```
-GROQ_API_KEY=ваш_ключ_с_console.groq.com
-```
-
-Запуск пайплайна:
-```bash
-python business/indexer/run_pipeline.py --file "data/videos/film.mp4" --title "Название"
-```
-
-Запуск API:
-```bash
-cd business/api && uvicorn main:app --reload --port 8000
-```
-
 ## Ключевые решения
 
-- **Сегменты размером ~3-9 сек** — соответствует ground truth, IoU ≥ 0.5
+- **VLM мультимодальный caption** — Qwen3-VL видит кадр + читает ASR одновременно, синтезируя оба сигнала
+- **Dual-level retrieval** — scenes (точные фрагменты) + events (sliding window для сюжетных запросов)
+- **BGE-M3 hybrid** — dense + sparse vectors в одном encode, FAISS-GPU для dense, in-memory dot-product для sparse
+- **Сегменты ~3-9 сек** — соответствует ground truth, IoU ≥ 0.5
 - **Shot-aligned chunking** — TransNetV2 даёт семантически чистые границы
-- **Два индекса** — FAISS для смысла, BM25 для точных цитат
-- **Запросы RU/EN + опечатки** — multilingual-e5 устойчив к этому
 - **Внешние API только для запросов** — видео не покидают сервер (требование соревнования)
 
-## .gitignore
+## Environment Variables
 
-```
-data/videos/
-data/audio/
-*.pkl
-shot_boundaries.json
-__pycache__/
-.venv/
-.env
-```
+- `GROQ_API_KEY` — Groq API (бизнес-версия: описания сцен)
+- `OPENROUTER_API_KEY` — OpenRouter API (бизнес-версия: QA endpoint)
