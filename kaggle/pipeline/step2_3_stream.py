@@ -159,50 +159,73 @@ def _extract_keyframe(
     return out_path
 
 
+def _extract_one_scene(
+    video_path: Path,
+    video_id: str,
+    scene: dict[str, Any],
+    already_captioned: set[str],
+    total: int,
+) -> None:
+    """Extract a single keyframe and mark ready. Used by thread pool."""
+    global _keyframes_done
+
+    scene_idx: int = scene["scene_idx"]
+    keyframe_time: float = scene["keyframe_time"]
+    out_path = KEYFRAMES_DIR / video_id / f"scene_{scene_idx:04d}.jpg"
+    key = _scene_key(video_id, scene_idx)
+
+    if out_path.exists():
+        _mark_ready(key, "keyframe_path", str(out_path), already_captioned)
+        with _counter_lock:
+            _keyframes_done += 1
+        return
+
+    try:
+        _extract_keyframe(video_path, keyframe_time, out_path)
+        _mark_ready(key, "keyframe_path", str(out_path), already_captioned)
+    except Exception:
+        logger.exception("Keyframe extraction failed: %s scene %d", video_id, scene_idx)
+        _mark_ready(key, "keyframe_path", "", already_captioned)
+
+    with _counter_lock:
+        _keyframes_done += 1
+        if _keyframes_done % 200 == 0 or _keyframes_done == total:
+            print(
+                f"[progress] Extracted {_keyframes_done} keyframes, "
+                f"Transcribed {_videos_transcribed} videos, "
+                f"Captioned {_captions_done} scenes"
+            )
+
+
 def keyframe_producer(
     shots: list[dict[str, Any]],
     already_captioned: set[str],
 ) -> None:
-    """Extract keyframes for every scene.  Runs in its own thread."""
-    global _keyframes_done
+    """Extract keyframes for every scene using a thread pool."""
+    from concurrent.futures import ThreadPoolExecutor
 
     total = sum(len(v["scenes"]) for v in shots)
+    num_workers = min(16, max(4, __import__("os").cpu_count() or 4))
+    logger.info("Keyframe producer starting with %d workers.", num_workers)
 
-    for video_entry in shots:
-        video_id: str = video_entry["video_id"]
-        audio_key: str = video_entry["audio_key"]
-        video_path = AUDIO_DIR.parent / audio_key
+    with ThreadPoolExecutor(max_workers=num_workers) as pool:
+        futures = []
+        for video_entry in shots:
+            video_id: str = video_entry["video_id"]
+            audio_key: str = video_entry["audio_key"]
+            video_path = AUDIO_DIR.parent / audio_key
 
-        for scene in video_entry["scenes"]:
-            scene_idx: int = scene["scene_idx"]
-            keyframe_time: float = scene["keyframe_time"]
-            out_path = KEYFRAMES_DIR / video_id / f"scene_{scene_idx:04d}.jpg"
-            key = _scene_key(video_id, scene_idx)
-
-            # Resume: if file already on disk, register and move on.
-            if out_path.exists():
-                _mark_ready(key, "keyframe_path", str(out_path), already_captioned)
-                with _counter_lock:
-                    _keyframes_done += 1
-                continue
-
-            try:
-                _extract_keyframe(video_path, keyframe_time, out_path)
-                _mark_ready(key, "keyframe_path", str(out_path), already_captioned)
-            except Exception:
-                logger.exception(
-                    "Keyframe extraction failed: %s scene %d", video_id, scene_idx
-                )
-                _mark_ready(key, "keyframe_path", "", already_captioned)
-
-            with _counter_lock:
-                _keyframes_done += 1
-                if _keyframes_done % 50 == 0 or _keyframes_done == total:
-                    print(
-                        f"[progress] Extracted {_keyframes_done} keyframes, "
-                        f"Transcribed {_videos_transcribed} videos, "
-                        f"Captioned {_captions_done} scenes"
+            for scene in video_entry["scenes"]:
+                futures.append(
+                    pool.submit(
+                        _extract_one_scene,
+                        video_path, video_id, scene, already_captioned, total,
                     )
+                )
+
+        # Wait for all to finish
+        for fut in futures:
+            fut.result()
 
     logger.info("Keyframe producer finished (%d frames).", _keyframes_done)
 
