@@ -33,6 +33,7 @@ from .config import (
     ASR_OVERLAP_SEC,
     AUDIO_DIR,
     KEYFRAMES_DIR,
+    TRANSCRIPTS_PKL,
     VLM_BATCH_SIZE,
     VLM_MAX_TOKENS,
     VLM_MODEL,
@@ -233,85 +234,131 @@ def _overlap_fraction(
     return overlap / seg_dur
 
 
+def _load_precomputed_transcripts() -> dict[str, list[dict]]:
+    """Load transcripts.pkl and normalize keys to video_id."""
+    import pickle
+
+    if not TRANSCRIPTS_PKL.exists():
+        logger.warning("transcripts.pkl not found at %s", TRANSCRIPTS_PKL)
+        return {}
+
+    with open(TRANSCRIPTS_PKL, "rb") as f:
+        raw: dict[str, list[dict]] = pickle.load(f)
+
+    normalized: dict[str, list[dict]] = {}
+    for key, segments in raw.items():
+        video_id = Path(key).stem  # "videos/video_xxx.opus" → "video_xxx"
+        normalized[video_id] = segments
+
+    logger.info("Loaded %d precomputed transcripts from transcripts.pkl", len(normalized))
+    return normalized
+
+
+def _map_segments_to_scenes(
+    segments: list[dict],
+    scenes: list[dict],
+    video_id: str,
+    already_captioned: set[str],
+) -> None:
+    """Map ASR segments to scenes using overlap logic."""
+    for scene in scenes:
+        scene_idx: int = scene["scene_idx"]
+        sc_start: float = scene["start"]
+        sc_end: float = scene["end"]
+        asr_start = max(0.0, sc_start - ASR_OVERLAP_SEC)
+        asr_end = sc_end + ASR_OVERLAP_SEC
+
+        matched_texts: list[str] = []
+        for seg in segments:
+            if _overlap_fraction(seg["start"], seg["end"], asr_start, asr_end) > 0.5:
+                text = seg["text"].strip()
+                if text:
+                    matched_texts.append(text)
+
+        key = _scene_key(video_id, scene_idx)
+        _mark_ready(key, "asr_text", " ".join(matched_texts), already_captioned)
+
+
 def whisper_producer(
     shots: list[dict[str, Any]],
     already_captioned: set[str],
 ) -> None:
-    """Transcribe every unique audio file and map segments to scenes."""
+    """Map precomputed transcripts to scenes; fallback to Whisper for missing videos."""
     global _videos_transcribed
 
+    precomputed = _load_precomputed_transcripts()
+
+    # ── Process videos with precomputed transcripts first ─────────────────
+    whisper_needed: list[dict[str, Any]] = []
+
+    for video_entry in shots:
+        video_id: str = video_entry["video_id"]
+        if video_id in precomputed:
+            _map_segments_to_scenes(
+                precomputed[video_id], video_entry["scenes"], video_id, already_captioned
+            )
+            with _counter_lock:
+                _videos_transcribed += 1
+        else:
+            whisper_needed.append(video_entry)
+
+    precomputed_count = len(shots) - len(whisper_needed)
+    logger.info(
+        "Mapped %d/%d videos from transcripts.pkl. %d need Whisper.",
+        precomputed_count, len(shots), len(whisper_needed),
+    )
+    print(
+        f"[progress] Extracted {_keyframes_done} keyframes, "
+        f"Transcribed {_videos_transcribed} videos (from pkl), "
+        f"Captioned {_captions_done} scenes"
+    )
+
+    if not whisper_needed:
+        logger.info("All videos covered by transcripts.pkl — skipping Whisper.")
+        return
+
+    # ── Whisper fallback for remaining videos ─────────────────────────────
     from faster_whisper import WhisperModel
 
-    logger.info("Loading faster-whisper model %s ...", WHISPER_MODEL)
+    logger.info("Loading faster-whisper model %s for %d remaining videos...", WHISPER_MODEL, len(whisper_needed))
     model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE)
-    logger.info("Whisper model loaded.")
 
-    # Group videos by resolved audio path to avoid duplicate transcriptions.
     audio_to_videos: dict[str, list[dict[str, Any]]] = {}
-    for video_entry in shots:
+    for video_entry in whisper_needed:
         audio_key = video_entry["audio_key"]
         audio_path = _audio_path_for_video(audio_key)
         if audio_path is None:
-            logger.warning(
-                "No audio found for %s (key=%s), skipping ASR",
-                video_entry["video_id"],
-                audio_key,
-            )
             for scene in video_entry["scenes"]:
                 key = _scene_key(video_entry["video_id"], scene["scene_idx"])
                 _mark_ready(key, "asr_text", "", already_captioned)
             continue
         audio_to_videos.setdefault(str(audio_path), []).append(video_entry)
 
-    seen_audio: dict[str, list[dict[str, Any]]] = {}
-    total_audio = len(audio_to_videos)
-
     for idx, (ap_str, video_entries) in enumerate(audio_to_videos.items(), 1):
-        print(f"[ASR] Transcribing {idx}/{total_audio}: {Path(ap_str).name}")
-
-        if ap_str not in seen_audio:
-            try:
-                segments_iter, _info = model.transcribe(ap_str, beam_size=5, vad_filter=True)
-                seg_list = [
-                    {"start": seg.start, "end": seg.end, "text": seg.text}
-                    for seg in segments_iter
-                ]
-                seen_audio[ap_str] = seg_list
-            except Exception:
-                logger.exception("Whisper transcription failed for %s", ap_str)
-                seen_audio[ap_str] = []
-
-        segments = seen_audio[ap_str]
+        print(f"[ASR-fallback] Transcribing {idx}/{len(audio_to_videos)}: {Path(ap_str).name}")
+        try:
+            segments_iter, _info = model.transcribe(ap_str, beam_size=5, vad_filter=True)
+            seg_list = [
+                {"start": seg.start, "end": seg.end, "text": seg.text}
+                for seg in segments_iter
+            ]
+        except Exception:
+            logger.exception("Whisper transcription failed for %s", ap_str)
+            seg_list = []
 
         for video_entry in video_entries:
-            video_id = video_entry["video_id"]
-            for scene in video_entry["scenes"]:
-                scene_idx: int = scene["scene_idx"]
-                sc_start: float = scene["start"]
-                sc_end: float = scene["end"]
-                # Expand scene window to capture ASR from neighboring scenes
-                asr_start = max(0.0, sc_start - ASR_OVERLAP_SEC)
-                asr_end = sc_end + ASR_OVERLAP_SEC
-
-                matched_texts: list[str] = []
-                for seg in segments:
-                    if _overlap_fraction(seg["start"], seg["end"], asr_start, asr_end) > 0.5:
-                        text = seg["text"].strip()
-                        if text:
-                            matched_texts.append(text)
-
-                key = _scene_key(video_id, scene_idx)
-                _mark_ready(key, "asr_text", " ".join(matched_texts), already_captioned)
-
-        with _counter_lock:
-            _videos_transcribed += 1
-            print(
-                f"[progress] Extracted {_keyframes_done} keyframes, "
-                f"Transcribed {_videos_transcribed} videos, "
-                f"Captioned {_captions_done} scenes"
+            _map_segments_to_scenes(
+                seg_list, video_entry["scenes"], video_entry["video_id"], already_captioned
             )
+            with _counter_lock:
+                _videos_transcribed += 1
+                print(
+                    f"[progress] Extracted {_keyframes_done} keyframes, "
+                    f"Transcribed {_videos_transcribed} videos, "
+                    f"Captioned {_captions_done} scenes"
+                )
 
-    logger.info("Whisper producer finished (%d audio files).", _videos_transcribed)
+    logger.info("ASR producer finished (%d total videos).", _videos_transcribed)
 
 
 # ── Consumer — VLM captioning ────────────────────────────────────────────────
@@ -381,6 +428,7 @@ def vlm_consumer(
             )
 
         _save_captions(captions)
+        _save_extractions()
         batch_keys.clear()
 
     while sentinels_received < num_producers:
