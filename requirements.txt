@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+FlagEmbedding
+faiss-cpu
+numpy
+pydantic
+symspellpy
+pandas
