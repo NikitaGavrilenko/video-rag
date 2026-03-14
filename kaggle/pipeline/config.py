@@ -25,16 +25,16 @@ EVENTS_FILE = WORK_DIR / "events.jsonl"
 MIN_SHOT_DURATION = 2.0  # секунды, фильтр микрошотов
 
 # ── Whisper ASR ─────────────────────────────────────────────────────────────
-WHISPER_MODEL = "large-v3"
+WHISPER_MODEL = "large-v3-turbo"
 WHISPER_DEVICE = "cuda"
 WHISPER_COMPUTE_TYPE = "float16"  # H100 supports bf16/fp16
 WHISPER_BATCH_SIZE = 16
 ASR_OVERLAP_SEC = 1.5  # расширение окна сцены для захвата ASR из соседних сцен
 
 # ── VLM Captioning ─────────────────────────────────────────────────────────
-VLM_MODEL = "Qwen/Qwen3-VL-8B"
+VLM_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 VLM_MAX_TOKENS = 256
-VLM_BATCH_SIZE = 256
+VLM_BATCH_SIZE = 128
 VLM_TENSOR_PARALLEL = 1  # single GPU sufficient for 8B
 
 VLM_PROMPT_TEMPLATE = """Speech transcript for this scene: "{asr_text}"

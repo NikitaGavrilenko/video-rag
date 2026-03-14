@@ -83,6 +83,7 @@ def main() -> None:
         max_model_len=4096,
         tensor_parallel_size=VLM_TENSOR_PARALLEL,
         limit_mm_per_prompt={"image": 1},
+        gpu_memory_utilization=0.85,
     )
     sampling_params = SamplingParams(max_tokens=VLM_MAX_TOKENS, temperature=0.3)
 
