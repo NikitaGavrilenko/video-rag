@@ -31,6 +31,7 @@ from tqdm import tqdm
 
 from .config import (
     BGE_MODEL,
+    COLBERT_SCENES_FILE,
     EVENTS_META_FILE,
     FAISS_EVENTS_INDEX,
     FAISS_SCENES_INDEX,
@@ -209,6 +210,16 @@ class Searcher:
         with open(SPARSE_EVENTS_FILE, "rb") as f:
             self.sparse_events: list[dict[str, float]] = pickle.load(f)
 
+        # -- ColBERT vectors (scenes only, optional) ---------------------------
+        self.colbert_scenes: list[np.ndarray] = []
+        if COLBERT_SCENES_FILE.exists():
+            print("[search] Loading ColBERT scene vectors ...")
+            with open(COLBERT_SCENES_FILE, "rb") as f:
+                self.colbert_scenes = pickle.load(f)
+            print(f"  Loaded {len(self.colbert_scenes)} ColBERT vectors")
+        else:
+            print("[search] ColBERT vectors not found, ColBERT channel disabled")
+
         # -- Scene lookup for event -> scene resolution ------------------------
         self._scene_lookup: dict[str, dict[str, Any]] = {}
         self._load_scene_lookup()
@@ -260,32 +271,40 @@ class Searcher:
     # -- Encode ------------------------------------------------------------
 
     def _encode_query(self, query: str) -> dict[str, Any]:
+        use_colbert = bool(self.colbert_scenes)
         output = self.bge_model.encode(
             [query],
             return_dense=True,
             return_sparse=True,
-            return_colbert_vecs=False,
+            return_colbert_vecs=use_colbert,
         )
         dense_vec: np.ndarray = output["dense_vecs"][0]
         raw_sparse: dict[int, float] = output["lexical_weights"][0]
         sparse_vec: dict[str, float] = {str(k): float(v) for k, v in raw_sparse.items()}
-        return {"dense": dense_vec, "sparse": sparse_vec}
+        result: dict[str, Any] = {"dense": dense_vec, "sparse": sparse_vec}
+        if use_colbert:
+            result["colbert"] = output["colbert_vecs"][0]
+        return result
 
     def _encode_queries_batch(self, queries: list[str], batch_size: int = 256) -> list[dict[str, Any]]:
         """Batch encode all queries at once — much faster than one-by-one."""
+        use_colbert = bool(self.colbert_scenes)
         output = self.bge_model.encode(
             queries,
             batch_size=batch_size,
             return_dense=True,
             return_sparse=True,
-            return_colbert_vecs=False,
+            return_colbert_vecs=use_colbert,
         )
         results = []
         for i in range(len(queries)):
             dense_vec = output["dense_vecs"][i]
             raw_sparse = output["lexical_weights"][i]
             sparse_vec = {str(k): float(v) for k, v in raw_sparse.items()}
-            results.append({"dense": dense_vec, "sparse": sparse_vec})
+            r: dict[str, Any] = {"dense": dense_vec, "sparse": sparse_vec}
+            if use_colbert:
+                r["colbert"] = output["colbert_vecs"][i]
+            results.append(r)
         return results
 
     # -- Train→test matching -----------------------------------------------
@@ -336,7 +355,40 @@ class Searcher:
                 **doc,
                 "faiss_score": float(score),
                 "source": source_label,
+                "_meta_idx": int(idx),
             })
+        return results
+
+    # -- ColBERT MaxSim search (re-scores FAISS scene candidates) ----------
+
+    def _colbert_search(
+        self,
+        query_colbert: np.ndarray,
+        faiss_results: list[dict[str, Any]],
+        source_label: str,
+    ) -> list[dict[str, Any]]:
+        """Re-score FAISS scene results with ColBERT MaxSim."""
+        if not self.colbert_scenes:
+            return []
+
+        results: list[dict[str, Any]] = []
+        q_vecs = query_colbert.astype(np.float32)
+
+        for r in faiss_results:
+            meta_idx = r.get("_meta_idx")
+            if meta_idx is None or meta_idx >= len(self.colbert_scenes):
+                continue
+            doc_vecs = self.colbert_scenes[meta_idx].astype(np.float32)
+            # MaxSim: for each query token, max sim to any doc token, then sum
+            sim = q_vecs @ doc_vecs.T
+            score = float(sim.max(axis=1).sum())
+            results.append({
+                **r,
+                "colbert_score": score,
+                "source": source_label,
+            })
+
+        results.sort(key=lambda x: x["colbert_score"], reverse=True)
         return results
 
     # -- Sparse search -----------------------------------------------------
@@ -476,10 +528,11 @@ class Searcher:
 
         for qi, enc in enumerate(encodings):
             q_tag = "main" if qi == 0 else "en"
-            ranked_lists.append(self._faiss_dense_search(
+            faiss_scenes = self._faiss_dense_search(
                 self.faiss_scenes, self.scenes_meta,
                 enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
-            ))
+            )
+            ranked_lists.append(faiss_scenes)
             ranked_lists.append(self._faiss_dense_search(
                 self.faiss_events, self.events_meta,
                 enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
@@ -492,6 +545,11 @@ class Searcher:
                 enc["sparse"], self.sparse_events, self.events_meta,
                 SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
             ))
+            # ColBERT: re-score FAISS scene results
+            if "colbert" in enc:
+                ranked_lists.append(self._colbert_search(
+                    enc["colbert"], faiss_scenes, f"colbert_scenes_{q_tag}",
+                ))
 
         merged = _rrf_merge(ranked_lists, k=RRF_K)
         deduped = _dedup_by_overlap(merged, iou_threshold=0.3)
@@ -645,10 +703,11 @@ class Searcher:
 
                 for ei, enc in enumerate(encodings):
                     q_tag = "main" if ei == 0 else "en"
-                    ranked_lists.append(self._faiss_dense_search(
+                    faiss_scenes = self._faiss_dense_search(
                         self.faiss_scenes, self.scenes_meta,
                         enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
-                    ))
+                    )
+                    ranked_lists.append(faiss_scenes)
                     ranked_lists.append(self._faiss_dense_search(
                         self.faiss_events, self.events_meta,
                         enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
@@ -661,6 +720,11 @@ class Searcher:
                         enc["sparse"], self.sparse_events, self.events_meta,
                         SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
                     ))
+                    # ColBERT: re-score FAISS scene results
+                    if "colbert" in enc:
+                        ranked_lists.append(self._colbert_search(
+                            enc["colbert"], faiss_scenes, f"colbert_scenes_{q_tag}",
+                        ))
 
                 merged = _rrf_merge(ranked_lists, k=RRF_K)
                 deduped = _dedup_by_overlap(merged, iou_threshold=0.3)

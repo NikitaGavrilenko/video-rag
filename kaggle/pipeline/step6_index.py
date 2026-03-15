@@ -19,6 +19,7 @@ from FlagEmbedding import BGEM3FlagModel
 from .config import (
     BGE_BATCH_SIZE,
     BGE_MODEL,
+    COLBERT_SCENES_FILE,
     EVENTS_FILE,
     EVENTS_META_FILE,
     FAISS_EVENTS_INDEX,
@@ -165,10 +166,19 @@ def main() -> None:
     print(f"[step6] Loading BGE-M3 model ({BGE_MODEL})...")
     model = BGEM3FlagModel(BGE_MODEL, use_fp16=True)
 
-    print(f"[step6] Encoding {len(scenes)} scene summaries (batch_size={BGE_BATCH_SIZE})...")
+    print(f"[step6] Encoding {len(scenes)} scene summaries (dense+sparse+ColBERT, batch_size={BGE_BATCH_SIZE})...")
     scene_texts = [doc.get("scene_summary", "") for doc in scenes]
-    scene_dense, scene_sparse = _encode(model, scene_texts, BGE_BATCH_SIZE)
-    print(f"  Scene embeddings: {scene_dense.shape[0]} dense, {len(scene_sparse)} sparse")
+    scene_output = model.encode(
+        scene_texts,
+        batch_size=BGE_BATCH_SIZE,
+        return_dense=True,
+        return_sparse=True,
+        return_colbert_vecs=True,
+    )
+    scene_dense = scene_output["dense_vecs"]
+    scene_sparse = [{str(k): float(v) for k, v in d.items()} for d in scene_output["lexical_weights"]]
+    scene_colbert = [v.astype(np.float16) for v in scene_output["colbert_vecs"]]
+    print(f"  Scene embeddings: {scene_dense.shape[0]} dense, {len(scene_sparse)} sparse, {len(scene_colbert)} ColBERT")
 
     print(f"[step6] Encoding {len(events)} event summaries (batch_size={BGE_BATCH_SIZE})...")
     event_texts = [doc.get("event_summary", "") for doc in events]
@@ -198,6 +208,10 @@ def main() -> None:
     print("[step6] Saving sparse vectors...")
     _save_pickle(scene_sparse, SPARSE_SCENES_FILE)
     _save_pickle(event_sparse, SPARSE_EVENTS_FILE)
+
+    # ── Save ColBERT vectors (scenes only) ───────────────────────────────────
+    print("[step6] Saving ColBERT vectors (fp16)...")
+    _save_pickle(scene_colbert, COLBERT_SCENES_FILE)
 
     # ── Train query index for train→test matching ────────────────────────────
     print("[step6] Building train query index...")

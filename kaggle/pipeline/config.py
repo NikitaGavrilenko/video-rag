@@ -70,6 +70,7 @@ SCENES_META_FILE = WORK_DIR / "scenes_meta.pkl"
 EVENTS_META_FILE = WORK_DIR / "events_meta.pkl"
 SPARSE_SCENES_FILE = WORK_DIR / "sparse_scenes.pkl"
 SPARSE_EVENTS_FILE = WORK_DIR / "sparse_events.pkl"
+COLBERT_SCENES_FILE = WORK_DIR / "colbert_scenes.pkl"
 BM25_SCENES_FILE = WORK_DIR / "bm25_scenes.pkl"
 BM25_EVENTS_FILE = WORK_DIR / "bm25_events.pkl"
 
