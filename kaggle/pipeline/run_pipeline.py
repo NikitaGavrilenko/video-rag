@@ -53,7 +53,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--skip-index", action="store_true",
-        help="Skip step 6 (FAISS-GPU + BM25 indexing)",
+        help="Skip step 6 (FAISS + indexing)",
+    )
+    parser.add_argument(
+        "--fix-captions", action="store_true",
+        help="Run step 3b: LLM post-processing of VLM captions (requires PROXY_API_KEY)",
     )
     parser.add_argument(
         "--search-only", action="store_true",
@@ -98,6 +102,11 @@ def main() -> None:
                 _run_step("Step 3: VLM captioning", step3_main)
             else:
                 print("\n[skip] Step 3: VLM captioning")
+
+        # Step 3b: LLM caption post-processing (optional)
+        if args.fix_captions:
+            from .step3b_fix_captions import main as step3b_main
+            _run_step("Step 3b: LLM caption post-processing", step3b_main)
 
         # Step 4: Scene documents
         from .step4_scene_docs import main as step4_main
