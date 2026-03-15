@@ -598,7 +598,7 @@ class Searcher:
 
         # Build submission
         rows: list[dict[str, Any]] = []
-        for (qid, _), results in zip(query_data, all_reranked):
+        for (qid, _, _, _), results in zip(query_data, all_reranked):
             out: dict[str, Any] = {"query_id": qid}
             for rank in range(1, FINAL_TOP_N + 1):
                 if rank <= len(results):
