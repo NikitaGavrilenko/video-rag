@@ -59,6 +59,7 @@ BGE_BATCH_SIZE = 512
 
 # ── Reranker ────────────────────────────────────────────────────────────────
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANKER_FINETUNED = WORK_DIR / "reranker_finetuned"
 RERANKER_TOP_K = 100  # входной размер для reranker
 RERANKER_OUTPUT_K = 10  # после reranker
 

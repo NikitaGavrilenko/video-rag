@@ -35,6 +35,7 @@ from .config import (
     FAISS_SCENES_INDEX,
     FINAL_TOP_N,
     RERANKER_MODEL,
+    RERANKER_FINETUNED,
     RERANKER_OUTPUT_K,
     RERANKER_TOP_K,
     RRF_K,
@@ -174,7 +175,10 @@ class Searcher:
         self.bge_model = BGEM3FlagModel(BGE_MODEL, use_fp16=True)
 
         print("[search] Loading reranker ...")
-        self.reranker = FlagReranker(RERANKER_MODEL, use_fp16=True)
+        # Use fine-tuned reranker if available, else pretrained
+        reranker_path = str(RERANKER_FINETUNED) if RERANKER_FINETUNED.exists() else RERANKER_MODEL
+        print(f"  Using: {reranker_path}")
+        self.reranker = FlagReranker(reranker_path, use_fp16=True)
 
         # -- Translated queries ------------------------------------------------
         self._translated: dict[int, dict[str, str]] = {}
