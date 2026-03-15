@@ -108,13 +108,13 @@ bash setup_h100.sh
 cd /kaggle/working/video-rag
 ```
 
-### 2. Офлайн-предобработка (H100, несколько часов)
+### 2. Офлайн-предобработка (Kaggle, 2×T4, несколько часов)
 
 ```bash
 # Полный pipeline
 python -m kaggle.pipeline.run_pipeline
 
-# Streaming-режим — шаги 2+3 параллельно (быстрее на H100)
+# Streaming-режим — шаги 2+3 параллельно (быстрее на 2×T4)
 python -m kaggle.pipeline.run_pipeline --stream
 
 # С fine-tune reranker (~+10 мин)
@@ -168,7 +168,7 @@ tar czf indexes.tar.gz \
 | Векторный поиск | FAISS `IndexFlatIP` (CPU) |
 | Реранкер | bge-reranker-v2-m3 (+ LoRA fine-tune) |
 | Препроцессинг запросов | SymSpell (EN) + SAGE T5 (RU, опц.) |
-| GPU | H100 (~21 GB VRAM) |
+| GPU | Kaggle 2×T4 (Tesla T4, 15 GB каждая) |
 
 ---
 
