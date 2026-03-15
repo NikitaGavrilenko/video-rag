@@ -27,6 +27,7 @@ from typing import Any
 import faiss
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from .config import (
     BGE_MODEL,
@@ -489,7 +490,7 @@ class Searcher:
 
         rows: list[dict[str, Any]] = []
 
-        for i, (_, row) in enumerate(test_df.iterrows()):
+        for i, (_, row) in tqdm(enumerate(test_df.iterrows()), total=len(test_df), desc="[search]"):
             qid = int(row["query_id"])
             query_text = str(row["question"])
 
@@ -516,9 +517,6 @@ class Searcher:
                     out[f"start_{rank}"] = 0.0
                     out[f"end_{rank}"] = 0.0
             rows.append(out)
-
-            if (i + 1) % 100 == 0:
-                print(f"  [{i+1}/{len(test_df)}] queries processed")
 
         cols = ["query_id"]
         for rank in range(1, FINAL_TOP_N + 1):
