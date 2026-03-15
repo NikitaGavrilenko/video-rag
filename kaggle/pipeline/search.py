@@ -361,15 +361,15 @@ class Searcher:
             result["end"] = scene["end"]
         return result
 
-    # -- Main search -------------------------------------------------------
+    # -- Retrieval (no reranker) --------------------------------------------
 
-    def search(
+    def _retrieve(
         self,
         query: str,
-        top_n: int = FINAL_TOP_N,
         corrected_query: str | None = None,
         translated_query: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[str, str, list[dict[str, Any]]]:
+        """Run retrieval channels + RRF + dedup. Returns (q_main, q_en, candidates)."""
         q_main = corrected_query or query
         q_en = translated_query or ""
 
@@ -381,11 +381,9 @@ class Searcher:
 
         ranked_lists: list[list[dict[str, Any]]] = []
 
-        # Train→test matching: use main query encoding
+        # Train→test matching
         train_matches = self._train_match(encodings[0]["dense"])
         if train_matches:
-            # High-confidence matches get injected as a separate ranked list
-            # with artificially high rank to boost through RRF
             high = [m for m in train_matches if m["source"] == "train_high"]
             low = [m for m in train_matches if m["source"] == "train_low"]
             if high:
@@ -393,90 +391,98 @@ class Searcher:
             if low:
                 ranked_lists.append(low)
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = {}
-            for qi, enc in enumerate(encodings):
-                q_tag = "main" if qi == 0 else "en"
-                futures[pool.submit(
-                    self._faiss_dense_search,
-                    self.faiss_scenes, self.scenes_meta,
-                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
-                )] = f"dense_scenes_{q_tag}"
+        for qi, enc in enumerate(encodings):
+            q_tag = "main" if qi == 0 else "en"
+            ranked_lists.append(self._faiss_dense_search(
+                self.faiss_scenes, self.scenes_meta,
+                enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
+            ))
+            ranked_lists.append(self._faiss_dense_search(
+                self.faiss_events, self.events_meta,
+                enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
+            ))
+            ranked_lists.append(self._sparse_search(
+                enc["sparse"], self.sparse_scenes, self.scenes_meta,
+                SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
+            ))
+            ranked_lists.append(self._sparse_search(
+                enc["sparse"], self.sparse_events, self.events_meta,
+                SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
+            ))
 
-                futures[pool.submit(
-                    self._faiss_dense_search,
-                    self.faiss_events, self.events_meta,
-                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
-                )] = f"dense_events_{q_tag}"
-
-                futures[pool.submit(
-                    self._sparse_search,
-                    enc["sparse"], self.sparse_scenes, self.scenes_meta,
-                    SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
-                )] = f"sparse_scenes_{q_tag}"
-
-                futures[pool.submit(
-                    self._sparse_search,
-                    enc["sparse"], self.sparse_events, self.events_meta,
-                    SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
-                )] = f"sparse_events_{q_tag}"
-
-            for future in as_completed(futures):
-                ranked_lists.append(future.result())
-
-        # RRF merge
         merged = _rrf_merge(ranked_lists, k=RRF_K)
-
-        # Dedup
         deduped = _dedup_by_overlap(merged)
-
-        # Reranker
         candidates = deduped[:RERANKER_TOP_K]
 
-        if candidates:
+        return q_main, q_en, candidates
+
+    # -- Batch reranking ---------------------------------------------------
+
+    def _batch_rerank(
+        self,
+        query_candidates: list[tuple[str, str, list[dict[str, Any]]]],
+    ) -> list[list[dict[str, Any]]]:
+        """Rerank candidates for multiple queries in one big GPU batch.
+
+        Input: [(q_main, q_en, candidates), ...]
+        Output: [reranked_candidates, ...] per query
+        """
+        # Build flat pair lists with index tracking
+        all_pairs_main: list[list[str]] = []
+        all_pairs_en: list[list[str]] = []
+        index_map: list[tuple[int, int]] = []  # (query_idx, candidate_idx)
+        has_en: list[bool] = []
+
+        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             query_lang = "ru" if _is_russian(q_main) else "en"
+            use_en = bool(q_en and q_en.strip().lower() != q_main.strip().lower())
+            has_en.append(use_en)
 
-            rerank_texts = [_get_rerank_text(c, query_lang) for c in candidates]
-            pairs_main = [[q_main, t] for t in rerank_texts]
-            scores_main = self.reranker.compute_score(pairs_main)
-            if isinstance(scores_main, (int, float)):
-                scores_main = [scores_main]
+            for ci, cand in enumerate(candidates):
+                text_main = _get_rerank_text(cand, query_lang)
+                all_pairs_main.append([q_main, text_main])
+                if use_en:
+                    text_en = _get_rerank_text(cand, "en")
+                    all_pairs_en.append([q_en, text_en])
+                index_map.append((qi, ci))
 
-            if q_en and q_en.strip().lower() != q_main.strip().lower():
-                rerank_texts_en = [_get_rerank_text(c, "en") for c in candidates]
-                pairs_en = [[q_en, t] for t in rerank_texts_en]
-                scores_en = self.reranker.compute_score(pairs_en)
-                if isinstance(scores_en, (int, float)):
-                    scores_en = [scores_en]
-                final_scores = [max(s1, s2) for s1, s2 in zip(scores_main, scores_en)]
-            else:
-                final_scores = list(scores_main) if not isinstance(scores_main, list) else scores_main
+        if not all_pairs_main:
+            return [[] for _ in query_candidates]
 
-            # Boost train_high matches in reranker score
-            for cand, score in zip(candidates, final_scores):
-                if cand.get("source") == "train_high":
-                    score = max(score, score + 5.0)  # significant boost
-                cand["reranker_score"] = float(score)
+        # One big reranker call for all pairs
+        scores_main = self.reranker.compute_score(all_pairs_main)
+        if isinstance(scores_main, (int, float)):
+            scores_main = [scores_main]
 
-            candidates.sort(key=lambda x: x["reranker_score"], reverse=True)
-            candidates = candidates[:RERANKER_OUTPUT_K]
+        scores_en_all: list[float] = []
+        if all_pairs_en:
+            scores_en_raw = self.reranker.compute_score(all_pairs_en)
+            if isinstance(scores_en_raw, (int, float)):
+                scores_en_raw = [scores_en_raw]
+            scores_en_all = list(scores_en_raw)
 
-        # Event -> scene resolution
-        resolved = [self._resolve_event_to_scene(c) for c in candidates]
+        # Distribute scores back to queries
+        en_idx = 0
+        for flat_idx, (qi, ci) in enumerate(index_map):
+            score = float(scores_main[flat_idx])
+            if has_en[qi] and en_idx < len(scores_en_all):
+                score = max(score, float(scores_en_all[en_idx]))
+                en_idx += 1
+            cand = query_candidates[qi][2][ci]
+            if cand.get("source") == "train_high":
+                score = score + 5.0
+            cand["reranker_score"] = score
 
-        # Final dedup and trim
-        resolved = _dedup_by_overlap(resolved)
-        final = resolved[:top_n]
+        # Sort and trim per query
+        results: list[list[dict[str, Any]]] = []
+        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
+            candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
+            top = candidates[:RERANKER_OUTPUT_K]
+            resolved = [self._resolve_event_to_scene(c) for c in top]
+            resolved = _dedup_by_overlap(resolved)
+            results.append(resolved[:FINAL_TOP_N])
 
-        return [
-            {
-                "video_file": r["video_id"],
-                "start": round(r["start"], 3),
-                "end": round(r["end"], 3),
-                "score": r.get("reranker_score", r.get("rrf_score", 0.0)),
-            }
-            for r in final
-        ]
+        return results
 
     # -- Submission generation ---------------------------------------------
 
@@ -484,34 +490,52 @@ class Searcher:
         self,
         test_csv: Path = TEST_CSV,
         output_csv: Path = WORK_DIR / "submission.csv",
+        rerank_batch_size: int = 32,
     ) -> Path:
+        """Two-phase submission: batch retrieval, then batch reranking."""
         test_df = pd.read_csv(test_csv)
         print(f"[search] Processing {len(test_df)} queries from {test_csv}")
 
-        rows: list[dict[str, Any]] = []
+        # Phase 1: Retrieval (FAISS + sparse + RRF) — fast
+        print("[search] Phase 1: Retrieval...")
+        query_data: list[tuple[int, str]] = []  # (qid, query_text)
+        retrieval_results: list[tuple[str, str, list[dict[str, Any]]]] = []
 
-        for i, (_, row) in tqdm(enumerate(test_df.iterrows()), total=len(test_df), desc="[search]"):
+        for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="[retrieval]"):
             qid = int(row["query_id"])
             query_text = str(row["question"])
-
             translated = self._translated.get(qid, {})
             corrected = translated.get("corrected", query_text)
             translated_en = translated.get("translated", "")
 
-            results = self.search(
+            q_main, q_en, candidates = self._retrieve(
                 query=query_text,
-                top_n=FINAL_TOP_N,
                 corrected_query=corrected,
                 translated_query=translated_en,
             )
+            query_data.append((qid, query_text))
+            retrieval_results.append((q_main, q_en, candidates))
 
+        # Phase 2: Batch reranking — GPU heavy, batched for throughput
+        print(f"[search] Phase 2: Batch reranking ({len(retrieval_results)} queries)...")
+        all_reranked: list[list[dict[str, Any]]] = []
+
+        for batch_start in tqdm(range(0, len(retrieval_results), rerank_batch_size),
+                                desc="[rerank]"):
+            batch = retrieval_results[batch_start : batch_start + rerank_batch_size]
+            reranked = self._batch_rerank(batch)
+            all_reranked.extend(reranked)
+
+        # Build submission
+        rows: list[dict[str, Any]] = []
+        for (qid, _), results in zip(query_data, all_reranked):
             out: dict[str, Any] = {"query_id": qid}
             for rank in range(1, FINAL_TOP_N + 1):
                 if rank <= len(results):
                     r = results[rank - 1]
-                    out[f"video_file_{rank}"] = r["video_file"]
-                    out[f"start_{rank}"] = r["start"]
-                    out[f"end_{rank}"] = r["end"]
+                    out[f"video_file_{rank}"] = r["video_id"]
+                    out[f"start_{rank}"] = round(r["start"], 3)
+                    out[f"end_{rank}"] = round(r["end"], 3)
                 else:
                     out[f"video_file_{rank}"] = ""
                     out[f"start_{rank}"] = 0.0
