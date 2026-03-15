@@ -1,29 +1,26 @@
 """
-search.py — Online search / inference for Video RAG submission generation.
-
-Uses FAISS-GPU for dense retrieval, in-memory sparse vector matching,
-and BM25 (rank_bm25) instead of Elasticsearch.
+search.py — Hybrid search with multi-query (corrected + translated).
 
 Flow:
-  1. Query -> BGE-M3 encode (dense + sparse)
-  2. Parallel search across 6 channels:
-     a. FAISS scenes dense
-     b. FAISS events dense
-     c. BM25 scenes (asr_text)
-     d. BM25 events (event_summary)
-     e. Sparse vector matching on scenes
-     f. Sparse vector matching on events
-  3. RRF merge across all channels
-  4. Dedup by (video_id, overlapping timecodes) — IoU > 50 %
-  5. BGE reranker: rerank top RERANKER_TOP_K -> keep RERANKER_OUTPUT_K
-  6. Event -> scene resolution (center_scene_idx for exact timecodes)
-  7. Return top FINAL_TOP_N results
+  1. Load translated_data.csv (corrected_question + translated_question)
+  2. For each query: encode BOTH corrected (RU) and translated (EN) versions
+  3. Parallel search across channels:
+     - FAISS dense scenes × 2 queries
+     - FAISS dense events × 2 queries
+     - Sparse scenes × 2 queries
+     - Sparse events × 2 queries
+  4. RRF merge across all channels
+  5. Dedup by (video_id, overlapping timecodes) — IoU > 50%
+  6. BGE reranker — language-aware: RU query vs RU caption, EN query vs EN caption
+  7. Event -> scene resolution
+  8. Return top FINAL_TOP_N results
 """
 
 from __future__ import annotations
 
 import json
 import pickle
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from pathlib import Path
@@ -35,8 +32,6 @@ import pandas as pd
 
 from .config import (
     BGE_MODEL,
-    BM25_EVENTS_FILE,
-    BM25_SCENES_FILE,
     EVENTS_META_FILE,
     FAISS_EVENTS_INDEX,
     FAISS_SCENES_INDEX,
@@ -52,6 +47,7 @@ from .config import (
     SPARSE_SCENES_FILE,
     SPARSE_EVENTS_FILE,
     TEST_CSV,
+    TRANSLATED_CSV,
     WORK_DIR,
 )
 
@@ -60,8 +56,48 @@ from .config import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+_RU_RE = re.compile(r"[а-яА-ЯёЁ]")
+
+
+def _is_russian(text: str) -> bool:
+    """Heuristic: contains Cyrillic characters."""
+    return bool(_RU_RE.search(text))
+
+
+def _get_rerank_text(doc: dict[str, Any], lang: str) -> str:
+    """Build reranker passage text matched to query language.
+
+    For scenes: use llm_caption in matching language + ASR.
+    For events: use event_summary (already bilingual).
+    """
+    # Event docs
+    if "event_summary" in doc and doc["event_summary"]:
+        return doc["event_summary"]
+
+    # Scene docs — prefer language-matched LLM caption
+    parts = []
+    if lang == "ru":
+        caption = doc.get("llm_caption_ru", "")
+        if caption:
+            parts.append(caption)
+        else:
+            # fallback to EN or raw summary
+            parts.append(doc.get("llm_caption_en", "") or doc.get("summary", ""))
+    else:
+        caption = doc.get("llm_caption_en", "")
+        if caption:
+            parts.append(caption)
+        else:
+            parts.append(doc.get("llm_caption_ru", "") or doc.get("summary", ""))
+
+    asr = doc.get("asr_text", "")
+    if asr:
+        parts.append(asr)
+
+    return " ".join(parts).strip() or doc.get("summary", "")
+
+
 def _iou(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
-    """Compute Intersection-over-Union for two time intervals."""
     inter_start = max(start_a, start_b)
     inter_end = min(end_a, end_b)
     intersection = max(0.0, inter_end - inter_start)
@@ -75,11 +111,7 @@ def _rrf_merge(
     ranked_lists: list[list[dict[str, Any]]],
     k: int,
 ) -> list[dict[str, Any]]:
-    """Reciprocal Rank Fusion across multiple ranked result lists.
-
-    Each result dict must contain at least: video_id, start, end, source.
-    Returns merged list sorted by RRF score (descending).
-    """
+    """Reciprocal Rank Fusion across multiple ranked result lists."""
     scores: dict[str, float] = defaultdict(float)
     items: dict[str, dict[str, Any]] = {}
 
@@ -103,10 +135,6 @@ def _dedup_by_overlap(
     results: list[dict[str, Any]],
     iou_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
-    """Remove duplicates where same video_id has overlapping timecodes (IoU > threshold).
-
-    Keeps the higher-scored result.
-    """
     kept: list[dict[str, Any]] = []
     for candidate in results:
         dominated = False
@@ -127,10 +155,6 @@ def _sparse_dot_search(
     doc_sparse_list: list[dict[str, float]],
     top_k: int,
 ) -> list[tuple[int, float]]:
-    """Compute dot product between query sparse vector and each document sparse vector.
-
-    Returns list of (doc_index, score) sorted by score descending.
-    """
     scores: list[tuple[int, float]] = []
     for i, doc_sparse in enumerate(doc_sparse_list):
         score = sum(query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items())
@@ -144,7 +168,7 @@ def _sparse_dot_search(
 # ---------------------------------------------------------------------------
 
 class Searcher:
-    """Hybrid search engine combining FAISS-GPU dense, BM25, and sparse retrieval with reranking."""
+    """Hybrid search engine: multi-query dense + sparse, language-aware reranking."""
 
     def __init__(self) -> None:
         from FlagEmbedding import BGEM3FlagModel, FlagReranker
@@ -155,52 +179,62 @@ class Searcher:
         print("[search] Loading reranker ...")
         self.reranker = FlagReranker(RERANKER_MODEL, use_fp16=True)
 
-        # -- Query preprocessor -------------------------------------------
-        print("[search] Loading query preprocessor ...")
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from preproc.query_preprocessor import QueryPreprocessor
-        train_csv = Path("/kaggle/input/competitions/multi-lingual-video-fragment-retrieval-challenge/video-rag/train/train_qa.csv")
-        self.qp = QueryPreprocessor(str(train_csv) if train_csv.exists() else None, use_sage=False)
+        # -- Translated queries (pre-corrected + English) ----------------------
+        self._translated: dict[int, dict[str, str]] = {}
+        self._load_translated()
 
-        # -- FAISS indices (CPU — fast enough for ~30K vectors) ----------------
+        # -- FAISS indices (CPU) -----------------------------------------------
         print("[search] Loading FAISS indices ...")
         self.faiss_scenes = faiss.read_index(str(FAISS_SCENES_INDEX))
         self.faiss_events = faiss.read_index(str(FAISS_EVENTS_INDEX))
 
-        # -- Metadata ---------------------------------------------------------
+        # -- Metadata ----------------------------------------------------------
         print("[search] Loading metadata ...")
         with open(SCENES_META_FILE, "rb") as f:
             self.scenes_meta: list[dict[str, Any]] = pickle.load(f)
         with open(EVENTS_META_FILE, "rb") as f:
             self.events_meta: list[dict[str, Any]] = pickle.load(f)
 
-        # -- Sparse vectors ---------------------------------------------------
+        # -- Sparse vectors ----------------------------------------------------
         print("[search] Loading sparse vectors ...")
         with open(SPARSE_SCENES_FILE, "rb") as f:
             self.sparse_scenes: list[dict[str, float]] = pickle.load(f)
         with open(SPARSE_EVENTS_FILE, "rb") as f:
             self.sparse_events: list[dict[str, float]] = pickle.load(f)
 
-        # -- BM25 indices -----------------------------------------------------
-        print("[search] Loading BM25 indices ...")
-        with open(BM25_SCENES_FILE, "rb") as f:
-            self.bm25_scenes = pickle.load(f)  # BM25Okapi
-        with open(BM25_EVENTS_FILE, "rb") as f:
-            self.bm25_events = pickle.load(f)  # BM25Okapi
-
-        # -- Scene lookup for event -> scene resolution -----------------------
+        # -- Scene lookup for event -> scene resolution ------------------------
         self._scene_lookup: dict[str, dict[str, Any]] = {}
         self._load_scene_lookup()
 
         print("[search] Searcher ready.")
 
+    # -- Translated queries -------------------------------------------------
+
+    def _load_translated(self) -> None:
+        """Load translated_data.csv for corrected + English translations."""
+        csv_path = TRANSLATED_CSV
+        if not csv_path.exists():
+            alt = Path(__file__).parent.parent.parent / "translated_data.csv"
+            if alt.exists():
+                csv_path = alt
+            else:
+                print(f"[search] WARNING: {TRANSLATED_CSV} not found, multi-query disabled")
+                return
+
+        df = pd.read_csv(csv_path)
+        for _, row in df.iterrows():
+            qid = int(row["query_id"])
+            self._translated[qid] = {
+                "corrected": str(row.get("corrected_question", row.get("question", ""))),
+                "translated": str(row.get("translated_question", "")),
+            }
+        print(f"[search] Loaded {len(self._translated)} translated queries")
+
     # -- Scene lookup -------------------------------------------------------
 
     def _load_scene_lookup(self) -> None:
-        """Build lookup: (video_id, scene_idx) -> scene doc."""
         if not SCENES_FILE.exists():
-            print(f"[search] WARNING: {SCENES_FILE} not found, event resolution disabled")
+            print(f"[search] WARNING: {SCENES_FILE} not found")
             return
         with open(SCENES_FILE, "r", encoding="utf-8") as f:
             for line in f:
@@ -214,7 +248,6 @@ class Searcher:
     # -- Encode ------------------------------------------------------------
 
     def _encode_query(self, query: str) -> dict[str, Any]:
-        """Encode query via BGE-M3 into dense and sparse representations."""
         output = self.bge_model.encode(
             [query],
             return_dense=True,
@@ -222,11 +255,8 @@ class Searcher:
             return_colbert_vecs=False,
         )
         dense_vec: np.ndarray = output["dense_vecs"][0]
-
-        # Sparse: BGE-M3 returns dict of {token_id: weight}
         raw_sparse: dict[int, float] = output["lexical_weights"][0]
         sparse_vec: dict[str, float] = {str(k): float(v) for k, v in raw_sparse.items()}
-
         return {"dense": dense_vec, "sparse": sparse_vec}
 
     # -- FAISS dense search ------------------------------------------------
@@ -239,7 +269,6 @@ class Searcher:
         top_k: int,
         source_label: str,
     ) -> list[dict[str, Any]]:
-        """Search a FAISS-GPU index and map results back to metadata."""
         query_vec_2d = query_vec.reshape(1, -1).astype(np.float32)
         scores, indices = index.search(query_vec_2d, top_k)
 
@@ -249,46 +278,9 @@ class Searcher:
                 continue
             doc = meta[idx]
             results.append({
-                "video_id": doc["video_id"],
-                "start": doc.get("start", 0.0),
-                "end": doc.get("end", 0.0),
+                **doc,
                 "faiss_score": float(score),
                 "source": source_label,
-                "center_scene_idx": doc.get("center_scene_idx"),
-                "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
-            })
-        return results
-
-    # -- BM25 search -------------------------------------------------------
-
-    def _bm25_search(
-        self,
-        bm25,
-        meta: list[dict[str, Any]],
-        query: str,
-        top_k: int,
-        source_label: str,
-    ) -> list[dict[str, Any]]:
-        """Search with a BM25Okapi index and map results back to metadata."""
-        tokenized_query = query.lower().split()
-        scores = bm25.get_scores(tokenized_query)
-        top_indices = np.argsort(scores)[::-1][:top_k]
-
-        results: list[dict[str, Any]] = []
-        for idx in top_indices:
-            if scores[idx] <= 0:
-                break
-            doc = meta[idx]
-            results.append({
-                "video_id": doc["video_id"],
-                "start": doc.get("start", 0.0),
-                "end": doc.get("end", 0.0),
-                "bm25_score": float(scores[idx]),
-                "source": source_label,
-                "center_scene_idx": doc.get("center_scene_idx"),
-                "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
             })
         return results
 
@@ -302,7 +294,6 @@ class Searcher:
         top_k: int,
         source_label: str,
     ) -> list[dict[str, Any]]:
-        """In-memory sparse dot-product search."""
         ranked = _sparse_dot_search(query_sparse, doc_sparse_list, top_k)
 
         results: list[dict[str, Any]] = []
@@ -311,21 +302,15 @@ class Searcher:
                 break
             doc = meta[idx]
             results.append({
-                "video_id": doc["video_id"],
-                "start": doc.get("start", 0.0),
-                "end": doc.get("end", 0.0),
+                **doc,
                 "sparse_score": float(score),
                 "source": source_label,
-                "center_scene_idx": doc.get("center_scene_idx"),
-                "scene_idx": doc.get("scene_idx"),
-                "text": doc.get("asr_text", "") or doc.get("summary", "") or doc.get("event_summary", ""),
             })
         return results
 
     # -- Event -> scene resolution -----------------------------------------
 
     def _resolve_event_to_scene(self, result: dict[str, Any]) -> dict[str, Any]:
-        """For event results, resolve center_scene_idx to exact scene timecodes."""
         center_idx = result.get("center_scene_idx")
         if center_idx is None:
             return result
@@ -340,86 +325,108 @@ class Searcher:
 
     # -- Main search -------------------------------------------------------
 
-    def search(self, query: str, top_n: int = FINAL_TOP_N) -> list[dict[str, Any]]:
-        """Run hybrid search and return top_n results.
+    def search(
+        self,
+        query: str,
+        top_n: int = FINAL_TOP_N,
+        corrected_query: str | None = None,
+        translated_query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Run multi-query hybrid search with language-aware reranking."""
+        q_main = corrected_query or query
+        q_en = translated_query or ""
 
-        Returns list of {video_file, start, end, score}.
-        """
-        # 1. Encode query
-        clean_query = self.qp(query)
-        encoded = self._encode_query(clean_query)
-        dense_vec = encoded["dense"]
-        sparse_vec = encoded["sparse"]
+        # Determine unique queries to encode
+        queries_to_search = [q_main]
+        if q_en and q_en.strip().lower() != q_main.strip().lower():
+            queries_to_search.append(q_en)
 
-        # 2. Parallel search across 6 channels
+        # Encode all queries
+        encodings = [self._encode_query(q) for q in queries_to_search]
+
+        # Search across all channels × all queries
         ranked_lists: list[list[dict[str, Any]]] = []
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {
-                pool.submit(
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {}
+            for qi, enc in enumerate(encodings):
+                q_tag = "main" if qi == 0 else "en"
+                futures[pool.submit(
                     self._faiss_dense_search,
                     self.faiss_scenes, self.scenes_meta,
-                    dense_vec, SEARCH_TOP_K_DENSE, "dense_scenes",
-                ): "scenes_dense",
-                pool.submit(
+                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
+                )] = f"dense_scenes_{q_tag}"
+
+                futures[pool.submit(
                     self._faiss_dense_search,
                     self.faiss_events, self.events_meta,
-                    dense_vec, SEARCH_TOP_K_DENSE, "dense_events",
-                ): "events_dense",
-                pool.submit(
-                    self._bm25_search,
-                    self.bm25_scenes, self.scenes_meta,
-                    query, SEARCH_TOP_K_SPARSE, "bm25_scenes",
-                ): "scenes_bm25",
-                pool.submit(
-                    self._bm25_search,
-                    self.bm25_events, self.events_meta,
-                    query, SEARCH_TOP_K_SPARSE, "bm25_events",
-                ): "events_bm25",
-                pool.submit(
+                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
+                )] = f"dense_events_{q_tag}"
+
+                futures[pool.submit(
                     self._sparse_search,
-                    sparse_vec, self.sparse_scenes, self.scenes_meta,
-                    SEARCH_TOP_K_SPARSE, "sparse_scenes",
-                ): "scenes_sparse",
-                pool.submit(
+                    enc["sparse"], self.sparse_scenes, self.scenes_meta,
+                    SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
+                )] = f"sparse_scenes_{q_tag}"
+
+                futures[pool.submit(
                     self._sparse_search,
-                    sparse_vec, self.sparse_events, self.events_meta,
-                    SEARCH_TOP_K_SPARSE, "sparse_events",
-                ): "events_sparse",
-            }
+                    enc["sparse"], self.sparse_events, self.events_meta,
+                    SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
+                )] = f"sparse_events_{q_tag}"
+
             for future in as_completed(futures):
                 ranked_lists.append(future.result())
 
-        # 3. RRF merge
+        # RRF merge
         merged = _rrf_merge(ranked_lists, k=RRF_K)
 
-        # 4. Dedup by overlapping timecodes
+        # Dedup by overlapping timecodes
         deduped = _dedup_by_overlap(merged)
 
-        # 5. Reranker: take top RERANKER_TOP_K candidates, rerank
+        # Reranker: language-aware — RU query vs RU caption, EN query vs EN caption
         candidates = deduped[:RERANKER_TOP_K]
 
         if candidates:
-            pairs = [[query, c.get("text", "")] for c in candidates]
-            reranker_scores = self.reranker.compute_score(pairs)
-            # compute_score returns a single float if only one pair
-            if isinstance(reranker_scores, (int, float)):
-                reranker_scores = [reranker_scores]
+            # Detect query language for reranker passage matching
+            query_lang = "ru" if _is_russian(q_main) else "en"
 
-            for cand, score in zip(candidates, reranker_scores):
+            # Double reranking: score against both RU and EN queries
+            # Take max score to handle bilingual content
+            rerank_texts = [_get_rerank_text(c, query_lang) for c in candidates]
+
+            # Primary: rerank with corrected (original language) query
+            pairs_main = [[q_main, t] for t in rerank_texts]
+            scores_main = self.reranker.compute_score(pairs_main)
+            if isinstance(scores_main, (int, float)):
+                scores_main = [scores_main]
+
+            # Secondary: if EN translation available, also rerank with it
+            if q_en and q_en.strip().lower() != q_main.strip().lower():
+                rerank_texts_en = [_get_rerank_text(c, "en") for c in candidates]
+                pairs_en = [[q_en, t] for t in rerank_texts_en]
+                scores_en = self.reranker.compute_score(pairs_en)
+                if isinstance(scores_en, (int, float)):
+                    scores_en = [scores_en]
+
+                # Take max of both language scores
+                final_scores = [max(s1, s2) for s1, s2 in zip(scores_main, scores_en)]
+            else:
+                final_scores = scores_main
+
+            for cand, score in zip(candidates, final_scores):
                 cand["reranker_score"] = float(score)
 
             candidates.sort(key=lambda x: x["reranker_score"], reverse=True)
             candidates = candidates[:RERANKER_OUTPUT_K]
 
-        # 6. Event -> scene resolution
+        # Event -> scene resolution
         resolved = [self._resolve_event_to_scene(c) for c in candidates]
 
-        # 7. Final dedup after resolution and trim to top_n
+        # Final dedup and trim
         resolved = _dedup_by_overlap(resolved)
         final = resolved[:top_n]
 
-        # Format output
         return [
             {
                 "video_file": r["video_id"],
@@ -437,16 +444,27 @@ class Searcher:
         test_csv: Path = TEST_CSV,
         output_csv: Path = WORK_DIR / "submission.csv",
     ) -> Path:
-        """Read test queries, run search for each, and write submission.csv."""
+        """Read test queries, run multi-query search, write submission.csv."""
         test_df = pd.read_csv(test_csv)
         print(f"[search] Processing {len(test_df)} queries from {test_csv}")
 
         rows: list[dict[str, Any]] = []
 
         for _, row in test_df.iterrows():
-            qid = row["query_id"]
-            query_text = row["question"]
-            results = self.search(query_text, top_n=FINAL_TOP_N)
+            qid = int(row["query_id"])
+            query_text = str(row["question"])
+
+            # Use translated data if available
+            translated = self._translated.get(qid, {})
+            corrected = translated.get("corrected", query_text)
+            translated_en = translated.get("translated", "")
+
+            results = self.search(
+                query=query_text,
+                top_n=FINAL_TOP_N,
+                corrected_query=corrected,
+                translated_query=translated_en,
+            )
 
             out: dict[str, Any] = {"query_id": qid}
             for rank in range(1, FINAL_TOP_N + 1):
@@ -461,7 +479,6 @@ class Searcher:
                     out[f"end_{rank}"] = 0.0
             rows.append(out)
 
-        # Build DataFrame with correct column order
         cols = ["query_id"]
         for rank in range(1, FINAL_TOP_N + 1):
             cols += [f"video_file_{rank}", f"start_{rank}", f"end_{rank}"]
@@ -479,7 +496,6 @@ class Searcher:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Run search and generate submission.csv."""
     searcher = Searcher()
     output = searcher.generate_submission()
     print(f"[search] Done. Submission at {output}")

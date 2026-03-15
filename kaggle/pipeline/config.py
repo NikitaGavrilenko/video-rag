@@ -1,11 +1,24 @@
 """
 config.py — paths, constants, and shared settings for the Kaggle pipeline.
+
+Auto-detects environment: /kaggle/working (server) vs data/pipeline/ (local).
 """
 
+import os
 from pathlib import Path
 
-# ── Kaggle paths ────────────────────────────────────────────────────────────
-DATA_DIR = Path("/kaggle/input/competitions/multi-lingual-video-fragment-retrieval-challenge/video-rag")
+# ── Auto-detect environment ────────────────────────────────────────────────
+_KAGGLE_WORK = Path("/kaggle/working")
+_LOCAL_ROOT = Path(__file__).parent.parent.parent  # video-rag/
+_LOCAL_WORK = _LOCAL_ROOT / "data" / "pipeline"
+
+if _KAGGLE_WORK.exists():
+    WORK_DIR = _KAGGLE_WORK
+    DATA_DIR = Path("/kaggle/input/competitions/multi-lingual-video-fragment-retrieval-challenge/video-rag")
+else:
+    WORK_DIR = _LOCAL_WORK
+    DATA_DIR = _LOCAL_ROOT / "data"
+
 VIDEO_DIR = DATA_DIR / "videos"
 AUDIO_DIR = DATA_DIR / "audio"
 TRAIN_CSV = DATA_DIR / "train" / "train_qa.csv"
@@ -13,9 +26,8 @@ TEST_CSV = DATA_DIR / "test" / "test.csv"
 TRANSCRIPTS_PKL = DATA_DIR / "transcripts.pkl"
 
 # ── Working directory (output) ──────────────────────────────────────────────
-WORK_DIR = Path("/kaggle/working")
 SHOTS_FILE = WORK_DIR / "shot_boundaries.json"
-TEAMMATE_SHOTS_FILE = WORK_DIR / "teammate_shots.json"  # приоритетная нарезка от тиммейта
+TEAMMATE_SHOTS_FILE = WORK_DIR / "teammate_shots.json"
 TRANSCRIPTS_FILE = WORK_DIR / "transcripts_large.pkl"
 KEYFRAMES_DIR = WORK_DIR / "keyframes"
 SCENES_FILE = WORK_DIR / "scenes.jsonl"
@@ -50,19 +62,27 @@ RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANKER_TOP_K = 100  # входной размер для reranker
 RERANKER_OUTPUT_K = 10  # после reranker
 
-# ── FAISS index (GPU) ───────────────────────────────────────────────────────
+# ── FAISS index ─────────────────────────────────────────────────────────────
 FAISS_SCENES_INDEX = WORK_DIR / "faiss_scenes.index"
 FAISS_EVENTS_INDEX = WORK_DIR / "faiss_events.index"
-SCENES_META_FILE = WORK_DIR / "scenes_meta.pkl"     # metadata parallel to FAISS
+SCENES_META_FILE = WORK_DIR / "scenes_meta.pkl"
 EVENTS_META_FILE = WORK_DIR / "events_meta.pkl"
-SPARSE_SCENES_FILE = WORK_DIR / "sparse_scenes.pkl"  # sparse vectors for scenes
+SPARSE_SCENES_FILE = WORK_DIR / "sparse_scenes.pkl"
 SPARSE_EVENTS_FILE = WORK_DIR / "sparse_events.pkl"
-BM25_SCENES_FILE = WORK_DIR / "bm25_scenes.pkl"      # BM25Okapi for scenes
-BM25_EVENTS_FILE = WORK_DIR / "bm25_events.pkl"      # BM25Okapi for events
+BM25_SCENES_FILE = WORK_DIR / "bm25_scenes.pkl"
+BM25_EVENTS_FILE = WORK_DIR / "bm25_events.pkl"
 
 # ── Event documents ─────────────────────────────────────────────────────────
 EVENT_WINDOW_SIZE = 5  # сцен в окне
 EVENT_WINDOW_STRIDE = 2  # шаг скольжения
+
+# ── Translated queries (pre-corrected + English translations) ──────────────
+TRANSLATED_CSV = WORK_DIR / "translated_data.csv"
+
+# ── LLM API (proxy for caption post-processing) ───────────────────────────
+PROXY_API_BASE = "https://api.proxyapi.ru/google"
+PROXY_API_KEY = os.environ.get("PROXY_API_KEY", "")
+PROXY_API_MODEL = "gemini-2.0-flash-lite"
 
 # ── Search ──────────────────────────────────────────────────────────────────
 SEARCH_TOP_K_DENSE = 50

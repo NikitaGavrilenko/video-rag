@@ -82,6 +82,8 @@ def _build_scene_metadata(docs: list[dict]) -> list[dict]:
             "end": doc["end"],
             "asr_text": doc.get("asr_text", ""),
             "summary": doc.get("scene_summary", ""),
+            "llm_caption_en": doc.get("llm_caption_en", ""),
+            "llm_caption_ru": doc.get("llm_caption_ru", ""),
         })
     return meta
 
@@ -95,7 +97,6 @@ def _build_event_metadata(docs: list[dict]) -> list[dict]:
             "event_idx": doc["event_idx"],
             "start": doc["start"],
             "end": doc["end"],
-            "asr_text": doc.get("asr_text", ""),
             "event_summary": doc.get("event_summary", ""),
             "center_scene_idx": doc.get("center_scene_idx", 0),
             "scene_indices": doc.get("scene_indices", []),

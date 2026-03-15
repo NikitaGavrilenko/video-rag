@@ -39,9 +39,9 @@ def main() -> None:
             for win_start in range(0, n, EVENT_WINDOW_STRIDE):
                 window = video_scenes[win_start : win_start + EVENT_WINDOW_SIZE]
 
-                # Build event_summary from non-empty vlm_captions.
-                captions = [s["vlm_caption"] for s in window if s.get("vlm_caption")]
-                event_summary = " ".join(captions)
+                # Build event_summary from scene_summary (bilingual: caption + ASR).
+                summaries = [s["scene_summary"] for s in window if s.get("scene_summary")]
+                event_summary = " ".join(summaries)
                 if not event_summary:
                     continue
 
