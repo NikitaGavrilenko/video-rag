@@ -412,66 +412,40 @@ class Searcher:
 
         return resolved
 
-    # -- Adaptive timecode expansion using neighbor reranker scores ----------
+    # -- Timecode expansion ±55s, capped at 180s -----------------------------
 
-    EXPAND_MIN_HALF = 25.0   # minimum ±25s (50s window)
-    EXPAND_MAX_HALF = 55.0   # maximum ±55s (110s window)
-    NEIGHBOR_SCORE_RATIO = 0.3  # include neighbor if score > main * ratio
+    EXPAND_SEC = 55.0       # ±55s around center → 110s window
+    MAX_DURATION = 180.0    # hard cap — never exceed 180s
 
-    def _adaptive_expand(
-        self,
-        result: dict[str, Any],
-        all_scored: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Expand timecodes adaptively: absorb high-scoring neighbors, then pad.
-
-        - Train matches: keep ground-truth timecodes.
-        - Others: greedily extend into adjacent scenes that also scored well,
-          then apply min/max padding.
-        """
+    def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Expand short segments to ±55s (110s window). Cap at 180s max."""
         if result.get("source", "").startswith("train"):
             return result
 
         result = result.copy()
-        scene_idx = result.get("scene_idx", -1)
-        vid = result["video_id"]
-        score = result.get("reranker_score", 0.0)
-
         start = result["start"]
         end = result["end"]
+        duration = end - start
 
-        if scene_idx >= 0:
-            # Build map of scored scenes for this video
-            vid_scenes: dict[int, dict[str, Any]] = {}
-            for s in all_scored:
-                if s["video_id"] == vid and "scene_idx" in s:
-                    si = s["scene_idx"]
-                    rs = s.get("reranker_score", -999.0)
-                    if si not in vid_scenes or rs > vid_scenes[si].get("reranker_score", -999.0):
-                        vid_scenes[si] = s
+        if duration >= self.MAX_DURATION:
+            # Already too long — trim to MAX_DURATION centered
+            center = (start + end) / 2.0
+            result["start"] = max(0.0, center - self.MAX_DURATION / 2.0)
+            result["end"] = center + self.MAX_DURATION / 2.0
+            return result
 
-            threshold = score * self.NEIGHBOR_SCORE_RATIO
-
-            # Expand left into high-scoring neighbors
-            idx = scene_idx - 1
-            while idx in vid_scenes and vid_scenes[idx].get("reranker_score", -999.0) > threshold:
-                start = min(start, vid_scenes[idx]["start"])
-                idx -= 1
-
-            # Expand right into high-scoring neighbors
-            idx = scene_idx + 1
-            while idx in vid_scenes and vid_scenes[idx].get("reranker_score", -999.0) > threshold:
-                end = max(end, vid_scenes[idx]["end"])
-                idx += 1
-
-        # Apply min/max padding around center
+        # Expand ±55s from center
         center = (start + end) / 2.0
-        half_dur = (end - start) / 2.0
-        half_dur = max(half_dur, self.EXPAND_MIN_HALF)
-        half_dur = min(half_dur, self.EXPAND_MAX_HALF)
+        new_start = max(0.0, center - self.EXPAND_SEC)
+        new_end = center + self.EXPAND_SEC
 
-        result["start"] = max(0.0, center - half_dur)
-        result["end"] = center + half_dur
+        # Cap at MAX_DURATION
+        if (new_end - new_start) > self.MAX_DURATION:
+            new_start = max(0.0, center - self.MAX_DURATION / 2.0)
+            new_end = center + self.MAX_DURATION / 2.0
+
+        result["start"] = new_start
+        result["end"] = new_end
         return result
 
     # -- Video-level clustering -----------------------------------------------
@@ -647,8 +621,7 @@ class Searcher:
         for qi, (q_main, q_en, candidates) in enumerate(resolved_qc):
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
-            # Adaptive expansion: absorb high-scoring neighbors, then pad
-            expanded = [self._adaptive_expand(c, candidates) for c in top]
+            expanded = [self._expand_timecodes(c) for c in top]
             expanded = _dedup_by_overlap(expanded, iou_threshold=0.3)
             # Video-level clustering: prefer multiple fragments from top videos
             final = self._video_cluster(expanded, FINAL_TOP_N)
