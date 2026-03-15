@@ -56,8 +56,8 @@ TRAIN_INDEX_FILE = WORK_DIR / "faiss_train.index"
 TRAIN_META_FILE = WORK_DIR / "train_meta.pkl"
 
 # Train→test matching thresholds
-TRAIN_MATCH_HIGH = 0.85   # direct answer — inject at top with high RRF boost
-TRAIN_MATCH_LOW = 0.70    # candidate — add to reranker pool
+TRAIN_MATCH_HIGH = 0.92   # direct answer — inject at top with reranker boost
+TRAIN_MATCH_LOW = 0.80    # candidate — add to reranker pool
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +496,7 @@ class Searcher:
                 score = max(score, en_score)
             cand = query_candidates[qi][2][ci]
             if cand.get("source") == "train_high":
-                score = score + 5.0
+                score = score + 2.0
             cand["reranker_score"] = score
 
         # Sort and trim per query
@@ -565,6 +565,8 @@ class Searcher:
             print(f"  Loaded {len(retrieval_results)} cached results")
         else:
             print("[search] Phase 1b: Retrieval...")
+            train_high_count = 0
+            train_low_count = 0
             for qi, (qid, q_main, q_en, _) in tqdm(enumerate(query_data), total=len(query_data), desc="[retrieval]"):
                 encodings = query_encodings[qi]
                 ranked_lists: list[list[dict[str, Any]]] = []
@@ -576,8 +578,10 @@ class Searcher:
                     low = [m for m in train_matches if m["source"] == "train_low"]
                     if high:
                         ranked_lists.append(high)
+                        train_high_count += 1
                     if low:
                         ranked_lists.append(low)
+                        train_low_count += 1
 
                 for ei, enc in enumerate(encodings):
                     q_tag = "main" if ei == 0 else "en"
@@ -602,6 +606,8 @@ class Searcher:
                 deduped = _dedup_by_overlap(merged)
                 candidates = deduped[:RERANKER_TOP_K]
                 retrieval_results.append((q_main, q_en, candidates))
+
+            print(f"  Train matches: {train_high_count} high (>{TRAIN_MATCH_HIGH}), {train_low_count} low (>{TRAIN_MATCH_LOW})")
 
             # Save cache
             with open(retrieval_cache, "wb") as f:
