@@ -56,7 +56,7 @@ TRAIN_INDEX_FILE = WORK_DIR / "faiss_train.index"
 TRAIN_META_FILE = WORK_DIR / "train_meta.pkl"
 
 # Train→test matching thresholds
-TRAIN_MATCH_HIGH = 0.92   # direct answer — inject at top with reranker boost
+TRAIN_MATCH_HIGH = 0.88   # direct answer — inject at top with reranker boost
 TRAIN_MATCH_LOW = 0.80    # candidate — add to reranker pool
 
 
@@ -554,7 +554,7 @@ class Searcher:
                 score = max(score, en_score)
             cand = query_candidates[qi][2][ci]
             if cand.get("source") == "train_high":
-                score = score + 2.0
+                score = score + 5.0
             cand["reranker_score"] = score
 
         # Sort, expand, dedup, cluster per query
