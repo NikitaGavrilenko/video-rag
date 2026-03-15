@@ -1,131 +1,133 @@
-# 🎬 Video RAG — Semantic Search over Video Fragments
+# Video RAG — семантический поиск видеофрагментов
 
-> **Master Hackathon ML 2026 · Okko/Sber case**  
-> [MultiLingual Video Fragment Retrieval Challenge](https://www.kaggle.com/competitions/multi-lingual-video-fragment-retrieval-challenge) on Kaggle
-
----
-
-## 🏆 Task
-
-Given a text query in Russian or English — find the **top-5 most relevant video fragments** across a large movie corpus, with **second-level precision**.
-
-**Metric:** `Composite Recall Score = avg(SuccessRate@{1,3,5}, VideoRecall@{1,3,5})`, IoU ≥ 0.5
+**Команда МаLышки** · Master Hackathon ML 2026 · кейс Okko/Sber  
+[MultiLingual Video Fragment Retrieval Challenge](https://www.kaggle.com/competitions/multi-lingual-video-fragment-retrieval-challenge)
 
 ---
 
-## ⚡ How it works
+## Задача
 
-The system has two stages: **offline preprocessing** (run once per video corpus) and **online inference** (run per query).
+Онлайн-кинотеатр Okko содержит тысячи фильмов и сериалов. Пользователи хотят находить не просто фильм, а конкретный момент внутри него: «где герой произносит эту фразу», «покажи сцену с погоней», «найди эпизод с этим фактом». Современный поиск по метаданным с этим не справляется.
 
-### 🔧 Stage 1 — Offline Preprocessing
+Мы построили систему, которая по текстовому запросу на русском или английском находит точные временные отрезки в видео — с точностью до секунды.
 
-```
-Video corpus
-  │
-  ├─ [step 1]  TransNetV2          → shot boundaries (scene list per video)
-  │
-  ├─ [step 2]  ffmpeg (CPU)        → keyframe JPEG from scene midpoint
-  │            faster-whisper      → ASR transcript (large-v3-turbo)
-  │              └─ or transcripts.pkl (precomputed, skips Whisper)
-  │
-  ├─ [step 3]  Qwen3-VL-8B (vLLM) → multimodal caption: image + ASR → EN description
-  │
-  ├─ [step 4]  scenes.jsonl        ← caption + ASR + train query augmentation
-  │
-  ├─ [step 5]  events.jsonl        ← sliding window (w=110s, step=10s) for coarse retrieval
-  │
-  └─ [step 6]  BGE-M3              → dense (1024d) + sparse (lexical) + ColBERT vectors
-               FAISS IndexFlatIP   → scene index + event index + train query index
-               [step 6b] LoRA fine-tune bge-reranker-v2-m3 on train triplets (optional)
-```
+**Метрика:** `Composite Recall Score = avg(SuccessRate@{1,3,5}, VideoRecall@{1,3,5})`, IoU ≥ 0.5  
+**Инференс:** < 1 секунды на запрос
 
-### 🔍 Stage 2 — Online Inference
+---
+
+## Как работает система
+
+### Этап 1 — Офлайн-предобработка (один раз на корпус)
 
 ```
-Query: "герой плачет под дождём"
+Видеокорпус
   │
-  ├─ Preprocessing   normalize + SymSpell (EN) + transliteration
-  ├─ Translation     corrected RU + translated EN (from translated_data.csv)
-  ├─ Encoding        BGE-M3 batch encode all queries (dense + sparse)
+  ├─ [шаг 1]  TransNetV2          → границы сцен по каждому видео
   │
-  ├─ Retrieval  ×10 channels (2 languages × 5 index types):
-  │   ├─ FAISS dense  — scenes (RU + EN)
-  │   ├─ FAISS dense  — events  (RU + EN)
-  │   ├─ sparse dot   — scenes  (RU + EN)
-  │   ├─ sparse dot   — events  (RU + EN)
-  │   └─ ColBERT MaxSim — scenes (RU + EN)
+  ├─ [шаг 2]  ffmpeg (CPU)        → ключевой кадр из середины сцены
+  │            faster-whisper      → транскрипция речи (large-v3-turbo)
+  │              └─ или transcripts.pkl (предвычисленные, пропускает Whisper)
   │
-  ├─ Train→test match   if cosine ≥ 0.92 with train query → inject GT answer (boost +5.0)
-  ├─ RRF fusion         Reciprocal Rank Fusion across all channels
-  ├─ Dedup              IoU > 0.3 → remove overlapping duplicates → top-50
+  ├─ [шаг 3]  Qwen3-VL-8B (vLLM) → мультимодальный caption: кадр + ASR → EN описание
   │
-  ├─ Reranking          bge-reranker-v2-m3, language-aware: max(score_ru, score_en)
-  ├─ Timecode expand    ±55s from scene center (window 110s, cap 180s)
-  └─ Video clustering   prefer fragments from top-2 scoring videos → top-5
+  ├─ [шаг 4]  scenes.jsonl        ← caption + ASR + аугментация train-запросами
+  │
+  ├─ [шаг 5]  events.jsonl        ← скользящее окно (w=110s, step=10s)
+  │                                  для крупнозернистого поиска
+  │
+  └─ [шаг 6]  BGE-M3              → dense (1024d) + sparse (lexical) + ColBERT
+               FAISS IndexFlatIP  → индекс сцен + индекс событий + индекс train-запросов
+               [шаг 6b] LoRA fine-tune bge-reranker-v2-m3 на train-триплетах (опц.)
+```
+
+### Этап 2 — Онлайн-инференс (на каждый запрос)
+
+```
+Запрос: "герой плачет под дождём"
+  │
+  ├─ Препроцессинг   нормализация + SymSpell (EN) + транслитерация
+  ├─ Переводы        corrected RU + translated EN (из translated_data.csv)
+  ├─ Кодирование     BGE-M3 batch encode всех запросов (dense + sparse)
+  │
+  ├─ Поиск  ×10 каналов (2 языка × 5 типов индексов):
+  │   ├─ FAISS dense    — сцены   (RU + EN)
+  │   ├─ FAISS dense    — события (RU + EN)
+  │   ├─ sparse dot     — сцены   (RU + EN)
+  │   ├─ sparse dot     — события (RU + EN)
+  │   └─ ColBERT MaxSim — сцены   (RU + EN)
+  │
+  ├─ Train→test   cosine ≥ 0.92 → inject GT-ответ (boost +5.0 к reranker score)
+  ├─ RRF fusion   объединение всех каналов через Reciprocal Rank Fusion
+  ├─ Dedup        IoU > 0.3 → убираем дубли → топ-50 кандидатов
+  │
+  ├─ Reranker     bge-reranker-v2-m3, language-aware: max(score_ru, score_en)
+  ├─ Таймкоды     расширение ±55s от центра сцены (окно 110s, cap 180s)
+  └─ Кластеризация предпочитать фрагменты из топ-2 видео → топ-5
 
   → submission.csv
 ```
 
 ---
 
-## 🗂 Repository structure
+## Структура репозитория
 
 ```
 video-rag/
 ├── kaggle/
 │   ├── pipeline/
-│   │   ├── config.py                    # paths & constants, auto-detect local/server
-│   │   ├── run_pipeline.py              # orchestrator (entry point)
+│   │   ├── config.py                    # пути и константы, auto-detect local/server
+│   │   ├── run_pipeline.py              # оркестратор (точка входа)
 │   │   ├── step1_shots.py               # TransNetV2 shot detection
-│   │   ├── step2_extract.py             # keyframes + ASR (parallel)
-│   │   ├── step2_3_stream.py            # streaming pipeline (steps 2+3 merged)
+│   │   ├── step2_extract.py             # keyframes + ASR (параллельно)
+│   │   ├── step2_3_stream.py            # streaming pipeline (шаги 2+3 слиты)
 │   │   ├── step3_vlm_caption.py         # Qwen3-VL-8B captioning
-│   │   ├── step4_scene_docs.py          # build scenes.jsonl
-│   │   ├── step5_event_docs.py          # build events.jsonl
+│   │   ├── step4_scene_docs.py          # сборка scenes.jsonl
+│   │   ├── step5_event_docs.py          # сборка events.jsonl
 │   │   ├── step6_index.py               # BGE-M3 → FAISS + train index
-│   │   ├── step6b_finetune_reranker.py  # LoRA fine-tune reranker (optional)
+│   │   ├── step6b_finetune_reranker.py  # LoRA fine-tune reranker (опционально)
 │   │   ├── search.py                    # retrieval + reranking → submission.csv
-│   │   ├── retry_failed.py              # re-caption failed scenes
-│   │   └── import_transcripts.py        # merge teammate ASR
-│   └── submit.ipynb                     # Kaggle notebook: load indexes → submit
+│   │   ├── retry_failed.py              # повтор упавших сцен
+│   │   └── import_transcripts.py        # merge ASR от тиммейтов
+│   └── submit.ipynb                     # Kaggle notebook: индексы → сабмит
 ├── preproc/
-│   └── query_preprocessor.py            # normalization + SymSpell + SAGE + transliteration
-├── setup_h100.sh                        # one-shot server setup script
+│   └── query_preprocessor.py            # нормализация + SymSpell + SAGE + транслитерация
+├── setup_h100.sh                        # настройка сервера (запустить один раз)
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## 🚀 Quick start
+## Воспроизведение результата
 
-### 1. Server setup (run once)
+### 1. Настройка сервера
 
 ```bash
 bash setup_h100.sh
 cd /kaggle/working/video-rag
 ```
 
-### 2. Run offline preprocessing (H100, ~few hours)
+### 2. Офлайн-предобработка (H100, несколько часов)
 
 ```bash
-# Full pipeline
+# Полный pipeline
 python -m kaggle.pipeline.run_pipeline
 
-# Streaming mode — steps 2+3 run in parallel (faster on H100)
+# Streaming-режим — шаги 2+3 параллельно (быстрее на H100)
 python -m kaggle.pipeline.run_pipeline --stream
 
-# With optional reranker fine-tuning (~10 min extra)
+# С fine-tune reranker (~+10 мин)
 python -m kaggle.pipeline.run_pipeline --stream --finetune
 ```
 
-**Skip flags** (useful for partial reruns):
+Флаги для частичного перезапуска:
 
 ```bash
 python -m kaggle.pipeline.run_pipeline --skip-shots --skip-extract --skip-vlm
 ```
 
-### 3. Rebuild index without re-running VLM/Whisper
+### 3. Пересборка индекса без повтора VLM/Whisper
 
 ```bash
 python -m kaggle.pipeline.step4_scene_docs
@@ -133,73 +135,68 @@ python -m kaggle.pipeline.step5_event_docs
 python -m kaggle.pipeline.step6_index
 ```
 
-### 4. Generate submission
+### 4. Генерация submission.csv
 
 ```bash
-# With cached retrieval (fast)
-python -m kaggle.pipeline.search
-
-# Force recompute retrieval
-python -m kaggle.pipeline.search --no-cache
+python -m kaggle.pipeline.search            # с кэшем retrieval
+python -m kaggle.pipeline.search --no-cache  # пересчитать retrieval
 ```
 
-### 5. Kaggle Notebook submission
+### 5. Сабмит через Kaggle Notebook
 
 ```bash
-# Pack indexes on server
+# Упаковать индексы на сервере
 tar czf indexes.tar.gz \
     /kaggle/working/*.index \
     /kaggle/working/*.pkl \
     /kaggle/working/scenes.jsonl \
     /kaggle/working/events.jsonl
-
-# Upload as Kaggle Dataset → attach to notebook → run kaggle/submit.ipynb
+# Загрузить как Kaggle Dataset → подключить к ноутбуку → запустить kaggle/submit.ipynb
 ```
 
 ---
 
-## 🧱 Tech stack
+## Технологический стек
 
-| Component | Model / Tool |
+| Компонент | Инструмент |
 |---|---|
-| Shot detection | TransNetV2 |
-| Keyframe extraction | ffmpeg (CPU, 16 threads) |
-| Speech recognition | faster-whisper `large-v3-turbo` |
-| Visual captioning | Qwen3-VL-8B via vLLM (BF16) |
-| Embedding | BGE-M3 — dense 1024d + sparse + ColBERT |
-| Vector index | FAISS `IndexFlatIP` (CPU) |
-| Reranker | bge-reranker-v2-m3 (+ optional LoRA fine-tune) |
-| Query preprocessing | SymSpell (EN) + SAGE T5 (RU, optional) |
+| Детекция сцен | TransNetV2 |
+| Извлечение кадров | ffmpeg (CPU, 16 потоков) |
+| Распознавание речи | faster-whisper `large-v3-turbo` |
+| Визуальный caption | Qwen3-VL-8B via vLLM (BF16) |
+| Эмбеддинги | BGE-M3 — dense 1024d + sparse + ColBERT |
+| Векторный поиск | FAISS `IndexFlatIP` (CPU) |
+| Реранкер | bge-reranker-v2-m3 (+ LoRA fine-tune) |
+| Препроцессинг запросов | SymSpell (EN) + SAGE T5 (RU, опц.) |
 | GPU | H100 (~21 GB VRAM) |
 
 ---
 
-## ⚙️ Environment variables
+## Переменные окружения
 
-| Variable | Used by | Required |
+| Переменная | Назначение | Обязательна |
 |---|---|---|
-| `PROXY_API_KEY` | Gemini via ProxyAPI | not needed for base pipeline |
+| `PROXY_API_KEY` | Gemini через ProxyAPI | нет (не нужна для базового pipeline) |
 
 ---
 
-## 📋 Key implementation notes
+## Технические детали
 
 <details>
-<summary>BGE-M3 encoding</summary>
+<summary>BGE-M3: кодирование</summary>
 
 ```python
 model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)
 output = model.encode(texts, return_dense=True, return_sparse=True, return_colbert_vecs=True)
 # output['dense_vecs']      — np.ndarray (N, 1024)
 # output['lexical_weights'] — list of {int_token_id: float}
-# output['colbert_vecs']    — list of np.ndarray (n_tokens, 1024), stored as fp16
+# output['colbert_vecs']    — list of np.ndarray (n_tokens, 1024), fp16
 ```
 </details>
 
 <details>
-<summary>Sparse search</summary>
+<summary>Sparse-поиск без внешних сервисов</summary>
 
-No external services. Pure dot-product over `lexical_weights` dicts:
 ```python
 score = sum(query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items())
 ```
@@ -208,7 +205,7 @@ score = sum(query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items())
 <details>
 <summary>RRF fusion</summary>
 
-UID = `{video_id}_{start}_{end}` — same fragment from multiple channels **accumulates** score:
+UID = `{video_id}_{start}_{end}` — один фрагмент из нескольких каналов **аккумулирует** score:
 ```python
 score[uid] += 1.0 / (RRF_K + rank)
 ```
@@ -217,13 +214,13 @@ score[uid] += 1.0 / (RRF_K + rank)
 <details>
 <summary>Train→test matching</summary>
 
-- cosine ≥ 0.92 → inject ground-truth answer with reranker score boost **+5.0**
-- cosine ≥ 0.80 → add to candidate pool (competes normally)
+- cosine ≥ 0.92 → inject GT-ответ, reranker boost **+5.0**
+- cosine ≥ 0.80 → добавить в пул кандидатов (конкурирует наравне)
 </details>
 
 <details>
-<summary>Timecode expansion</summary>
+<summary>Расширение таймкодов</summary>
 
-Short scenes expanded to **±55s** from center (110s window). Hard cap: 180s.
-Train matches keep original ground-truth timecodes unchanged.
+Короткие сцены расширяются до **±55s** от центра (окно 110s). Жёсткий cap: 180s.  
+Train-матчи сохраняют оригинальные GT-таймкоды без изменений.
 </details>
