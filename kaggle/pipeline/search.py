@@ -366,7 +366,7 @@ class Searcher:
     # -- Timecode expansion ±55s, capped at 180s -----------------------------
 
     EXPAND_SEC = 55.0       # ±55s around center → 110s window
-    MAX_DURATION = 180.0    # hard cap — never exceed 180s
+    MAX_DURATION = 212.0    # hard cap — never exceed 212s
 
     def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
         """Expand short segments to ±55s (110s window). Cap at 180s max."""
