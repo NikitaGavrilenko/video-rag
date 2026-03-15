@@ -1,9 +1,9 @@
 """
-step6_index.py — Create BGE-M3 embeddings, build FAISS-GPU indices, and BM25.
+step6_index.py — Create BGE-M3 embeddings and build FAISS indices.
 
 Reads scenes.jsonl and events.jsonl, encodes with BGE-M3 (dense + sparse),
-builds FAISS inner-product indices on GPU, saves metadata/sparse vectors
-as pickle, and builds BM25 indices over text fields.
+builds FAISS inner-product indices (CPU), saves metadata/sparse vectors as pickle.
+Also encodes train queries for train→test matching at search time.
 """
 
 import json
@@ -12,14 +12,12 @@ from typing import Any
 
 import faiss
 import numpy as np
+import pandas as pd
 from FlagEmbedding import BGEM3FlagModel
-from rank_bm25 import BM25Okapi
 
 from .config import (
     BGE_BATCH_SIZE,
     BGE_MODEL,
-    BM25_EVENTS_FILE,
-    BM25_SCENES_FILE,
     EVENTS_FILE,
     EVENTS_META_FILE,
     FAISS_EVENTS_INDEX,
@@ -28,11 +26,15 @@ from .config import (
     SCENES_META_FILE,
     SPARSE_EVENTS_FILE,
     SPARSE_SCENES_FILE,
+    TRAIN_CSV,
+    WORK_DIR,
 )
+
+TRAIN_INDEX_FILE = WORK_DIR / "faiss_train.index"
+TRAIN_META_FILE = WORK_DIR / "train_meta.pkl"
 
 
 def _load_jsonl(path: str | Any) -> list[dict]:
-    """Load a JSONL file into a list of dicts."""
     docs: list[dict] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -45,25 +47,20 @@ def _load_jsonl(path: str | Any) -> list[dict]:
 def _encode(
     model: BGEM3FlagModel, texts: list[str], batch_size: int
 ) -> tuple[np.ndarray, list[dict[str, float]]]:
-    """Encode texts with BGE-M3, returning dense vectors and sparse weight dicts."""
     output = model.encode(
         texts,
         batch_size=batch_size,
         return_dense=True,
         return_sparse=True,
     )
-    dense_vectors: np.ndarray = output["dense_vecs"]  # already np.ndarray
-
-    # Convert sparse weights: token_id (int) -> str key for compatibility.
+    dense_vectors: np.ndarray = output["dense_vecs"]
     sparse_vectors: list[dict[str, float]] = []
     for sparse_dict in output["lexical_weights"]:
         sparse_vectors.append({str(k): float(v) for k, v in sparse_dict.items()})
-
     return dense_vectors, sparse_vectors
 
 
 def _build_faiss_index(vectors: np.ndarray) -> faiss.Index:
-    """Build a FAISS IndexFlatIP (CPU — fast enough for ~30K vectors)."""
     dim = vectors.shape[1]
     index = faiss.IndexFlatIP(dim)
     print(f"  Adding {vectors.shape[0]} vectors (dim={dim})...")
@@ -72,7 +69,6 @@ def _build_faiss_index(vectors: np.ndarray) -> faiss.Index:
 
 
 def _build_scene_metadata(docs: list[dict]) -> list[dict]:
-    """Extract metadata dicts for scenes, parallel to FAISS index order."""
     meta: list[dict] = []
     for doc in docs:
         meta.append({
@@ -89,7 +85,6 @@ def _build_scene_metadata(docs: list[dict]) -> list[dict]:
 
 
 def _build_event_metadata(docs: list[dict]) -> list[dict]:
-    """Extract metadata dicts for events, parallel to FAISS index order."""
     meta: list[dict] = []
     for doc in docs:
         meta.append({
@@ -104,16 +99,57 @@ def _build_event_metadata(docs: list[dict]) -> list[dict]:
     return meta
 
 
-def _build_bm25(texts: list[str]) -> BM25Okapi:
-    """Tokenise texts by whitespace and build a BM25Okapi index."""
-    tokenized = [text.lower().split() for text in texts]
-    return BM25Okapi(tokenized)
-
-
 def _save_pickle(obj: Any, path: Any) -> None:
     with open(path, "wb") as f:
         pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
     print(f"  Saved {path}")
+
+
+def _build_train_index(model: BGEM3FlagModel) -> None:
+    """Encode train queries and build a FAISS index for train→test matching."""
+    if not TRAIN_CSV.exists():
+        print("[step6] train_qa.csv not found, skipping train index")
+        return
+
+    df = pd.read_csv(TRAIN_CSV)
+    required = {"question", "video_file", "start", "end"}
+    if not required.issubset(set(df.columns)):
+        print(f"[step6] train_qa.csv missing columns {required - set(df.columns)}, skipping")
+        return
+
+    # Build train metadata + query texts
+    train_meta: list[dict] = []
+    train_texts: list[str] = []
+
+    for _, row in df.iterrows():
+        question = str(row["question"])
+        video_file = str(row["video_file"])
+        start = float(row["start"])
+        end = float(row["end"])
+
+        # Also include English translation if available
+        question_en = str(row.get("question_en", "")) if pd.notna(row.get("question_en")) else ""
+        combined = question
+        if question_en and question_en.lower() != question.lower():
+            combined = f"{question} {question_en}"
+
+        train_meta.append({
+            "video_id": video_file,
+            "start": start,
+            "end": end,
+            "question": question,
+            "question_en": question_en,
+        })
+        train_texts.append(combined)
+
+    print(f"[step6] Encoding {len(train_texts)} train queries...")
+    train_dense, _ = _encode(model, train_texts, BGE_BATCH_SIZE)
+
+    train_index = _build_faiss_index(train_dense)
+    faiss.write_index(train_index, str(TRAIN_INDEX_FILE))
+    print(f"  Saved train FAISS index ({train_index.ntotal} vectors) -> {TRAIN_INDEX_FILE}")
+
+    _save_pickle(train_meta, TRAIN_META_FILE)
 
 
 def main() -> None:
@@ -137,7 +173,7 @@ def main() -> None:
     event_dense, event_sparse = _encode(model, event_texts, BGE_BATCH_SIZE)
     print(f"  Event embeddings: {event_dense.shape[0]} dense, {len(event_sparse)} sparse")
 
-    # ── Build FAISS indices on GPU ───────────────────────────────────────────
+    # ── Build FAISS indices ──────────────────────────────────────────────────
     print("[step6] Building FAISS scenes index...")
     scenes_index = _build_faiss_index(scene_dense)
     faiss.write_index(scenes_index, str(FAISS_SCENES_INDEX))
@@ -161,22 +197,14 @@ def main() -> None:
     _save_pickle(scene_sparse, SPARSE_SCENES_FILE)
     _save_pickle(event_sparse, SPARSE_EVENTS_FILE)
 
-    # ── Build and save BM25 indices ──────────────────────────────────────────
-    print("[step6] Building BM25 index over scene asr_text...")
-    scene_asr_texts = [doc.get("asr_text", "") for doc in scenes]
-    bm25_scenes = _build_bm25(scene_asr_texts)
-    _save_pickle(bm25_scenes, BM25_SCENES_FILE)
-
-    print("[step6] Building BM25 index over event summaries...")
-    event_summary_texts = [doc.get("event_summary", "") for doc in events]
-    bm25_events = _build_bm25(event_summary_texts)
-    _save_pickle(bm25_events, BM25_EVENTS_FILE)
+    # ── Train query index for train→test matching ────────────────────────────
+    print("[step6] Building train query index...")
+    _build_train_index(model)
 
     # ── Summary ──────────────────────────────────────────────────────────────
     print(
         f"[step6] Done. "
-        f"{scenes_index.ntotal} scenes + {events_index.ntotal} events indexed. "
-        f"BM25 built for both."
+        f"{scenes_index.ntotal} scenes + {events_index.ntotal} events indexed."
     )
 
 

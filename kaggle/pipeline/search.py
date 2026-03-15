@@ -1,19 +1,17 @@
 """
-search.py — Hybrid search with multi-query (corrected + translated).
+search.py — Hybrid search with train→test matching + multi-query.
 
 Flow:
   1. Load translated_data.csv (corrected_question + translated_question)
-  2. For each query: encode BOTH corrected (RU) and translated (EN) versions
-  3. Parallel search across channels:
-     - FAISS dense scenes × 2 queries
-     - FAISS dense events × 2 queries
-     - Sparse scenes × 2 queries
-     - Sparse events × 2 queries
-  4. RRF merge across all channels
-  5. Dedup by (video_id, overlapping timecodes) — IoU > 50%
-  6. BGE reranker — language-aware: RU query vs RU caption, EN query vs EN caption
-  7. Event -> scene resolution
-  8. Return top FINAL_TOP_N results
+  2. For each test query:
+     a. Check train index — if cosine sim > threshold, inject train answer
+     b. Encode BOTH corrected (RU) and translated (EN) versions
+     c. Search: FAISS dense + sparse × scenes/events × 2 queries
+  3. RRF merge across all channels (including train matches)
+  4. Dedup by (video_id, overlapping timecodes) — IoU > 50%
+  5. BGE reranker — language-aware: RU query vs RU caption, EN query vs EN caption
+  6. Event -> scene resolution
+  7. Return top FINAL_TOP_N results
 """
 
 from __future__ import annotations
@@ -51,6 +49,14 @@ from .config import (
     WORK_DIR,
 )
 
+# Train index paths (built by step6)
+TRAIN_INDEX_FILE = WORK_DIR / "faiss_train.index"
+TRAIN_META_FILE = WORK_DIR / "train_meta.pkl"
+
+# Train→test matching thresholds
+TRAIN_MATCH_HIGH = 0.85   # direct answer — inject at top with high RRF boost
+TRAIN_MATCH_LOW = 0.70    # candidate — add to reranker pool
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,28 +66,20 @@ _RU_RE = re.compile(r"[а-яА-ЯёЁ]")
 
 
 def _is_russian(text: str) -> bool:
-    """Heuristic: contains Cyrillic characters."""
     return bool(_RU_RE.search(text))
 
 
 def _get_rerank_text(doc: dict[str, Any], lang: str) -> str:
-    """Build reranker passage text matched to query language.
-
-    For scenes: use llm_caption in matching language + ASR.
-    For events: use event_summary (already bilingual).
-    """
-    # Event docs
+    """Build reranker passage text matched to query language."""
     if "event_summary" in doc and doc["event_summary"]:
         return doc["event_summary"]
 
-    # Scene docs — prefer language-matched LLM caption
     parts = []
     if lang == "ru":
         caption = doc.get("llm_caption_ru", "")
         if caption:
             parts.append(caption)
         else:
-            # fallback to EN or raw summary
             parts.append(doc.get("llm_caption_en", "") or doc.get("summary", ""))
     else:
         caption = doc.get("llm_caption_en", "")
@@ -94,7 +92,7 @@ def _get_rerank_text(doc: dict[str, Any], lang: str) -> str:
     if asr:
         parts.append(asr)
 
-    return " ".join(parts).strip() or doc.get("summary", "")
+    return " ".join(parts).strip() or doc.get("summary", "") or doc.get("question", "")
 
 
 def _iou(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
@@ -111,7 +109,6 @@ def _rrf_merge(
     ranked_lists: list[list[dict[str, Any]]],
     k: int,
 ) -> list[dict[str, Any]]:
-    """Reciprocal Rank Fusion across multiple ranked result lists."""
     scores: dict[str, float] = defaultdict(float)
     items: dict[str, dict[str, Any]] = {}
 
@@ -168,7 +165,7 @@ def _sparse_dot_search(
 # ---------------------------------------------------------------------------
 
 class Searcher:
-    """Hybrid search engine: multi-query dense + sparse, language-aware reranking."""
+    """Hybrid search with train→test matching + language-aware reranking."""
 
     def __init__(self) -> None:
         from FlagEmbedding import BGEM3FlagModel, FlagReranker
@@ -179,7 +176,7 @@ class Searcher:
         print("[search] Loading reranker ...")
         self.reranker = FlagReranker(RERANKER_MODEL, use_fp16=True)
 
-        # -- Translated queries (pre-corrected + English) ----------------------
+        # -- Translated queries ------------------------------------------------
         self._translated: dict[int, dict[str, str]] = {}
         self._load_translated()
 
@@ -187,6 +184,11 @@ class Searcher:
         print("[search] Loading FAISS indices ...")
         self.faiss_scenes = faiss.read_index(str(FAISS_SCENES_INDEX))
         self.faiss_events = faiss.read_index(str(FAISS_EVENTS_INDEX))
+
+        # -- Train index (optional) --------------------------------------------
+        self.faiss_train: faiss.Index | None = None
+        self.train_meta: list[dict[str, Any]] = []
+        self._load_train_index()
 
         # -- Metadata ----------------------------------------------------------
         print("[search] Loading metadata ...")
@@ -208,10 +210,9 @@ class Searcher:
 
         print("[search] Searcher ready.")
 
-    # -- Translated queries -------------------------------------------------
+    # -- Load helpers -------------------------------------------------------
 
     def _load_translated(self) -> None:
-        """Load translated_data.csv for corrected + English translations."""
         csv_path = TRANSLATED_CSV
         if not csv_path.exists():
             alt = Path(__file__).parent.parent.parent / "translated_data.csv"
@@ -230,11 +231,17 @@ class Searcher:
             }
         print(f"[search] Loaded {len(self._translated)} translated queries")
 
-    # -- Scene lookup -------------------------------------------------------
+    def _load_train_index(self) -> None:
+        if not TRAIN_INDEX_FILE.exists() or not TRAIN_META_FILE.exists():
+            print("[search] Train index not found, train→test matching disabled")
+            return
+        self.faiss_train = faiss.read_index(str(TRAIN_INDEX_FILE))
+        with open(TRAIN_META_FILE, "rb") as f:
+            self.train_meta = pickle.load(f)
+        print(f"[search] Loaded train index ({self.faiss_train.ntotal} queries)")
 
     def _load_scene_lookup(self) -> None:
         if not SCENES_FILE.exists():
-            print(f"[search] WARNING: {SCENES_FILE} not found")
             return
         with open(SCENES_FILE, "r", encoding="utf-8") as f:
             for line in f:
@@ -258,6 +265,32 @@ class Searcher:
         raw_sparse: dict[int, float] = output["lexical_weights"][0]
         sparse_vec: dict[str, float] = {str(k): float(v) for k, v in raw_sparse.items()}
         return {"dense": dense_vec, "sparse": sparse_vec}
+
+    # -- Train→test matching -----------------------------------------------
+
+    def _train_match(self, query_vec: np.ndarray) -> list[dict[str, Any]]:
+        """Find similar train queries and return their ground-truth answers."""
+        if self.faiss_train is None:
+            return []
+
+        query_vec_2d = query_vec.reshape(1, -1).astype(np.float32)
+        scores, indices = self.faiss_train.search(query_vec_2d, 10)
+
+        results: list[dict[str, Any]] = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx == -1 or float(score) < TRAIN_MATCH_LOW:
+                continue
+            meta = self.train_meta[idx]
+            is_high = float(score) >= TRAIN_MATCH_HIGH
+            results.append({
+                "video_id": meta["video_id"],
+                "start": meta["start"],
+                "end": meta["end"],
+                "train_score": float(score),
+                "source": "train_high" if is_high else "train_low",
+                "question": meta.get("question", ""),
+            })
+        return results
 
     # -- FAISS dense search ------------------------------------------------
 
@@ -284,7 +317,7 @@ class Searcher:
             })
         return results
 
-    # -- Sparse vector search on doc list ----------------------------------
+    # -- Sparse search -----------------------------------------------------
 
     def _sparse_search(
         self,
@@ -332,20 +365,28 @@ class Searcher:
         corrected_query: str | None = None,
         translated_query: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Run multi-query hybrid search with language-aware reranking."""
         q_main = corrected_query or query
         q_en = translated_query or ""
 
-        # Determine unique queries to encode
         queries_to_search = [q_main]
         if q_en and q_en.strip().lower() != q_main.strip().lower():
             queries_to_search.append(q_en)
 
-        # Encode all queries
         encodings = [self._encode_query(q) for q in queries_to_search]
 
-        # Search across all channels × all queries
         ranked_lists: list[list[dict[str, Any]]] = []
+
+        # Train→test matching: use main query encoding
+        train_matches = self._train_match(encodings[0]["dense"])
+        if train_matches:
+            # High-confidence matches get injected as a separate ranked list
+            # with artificially high rank to boost through RRF
+            high = [m for m in train_matches if m["source"] == "train_high"]
+            low = [m for m in train_matches if m["source"] == "train_low"]
+            if high:
+                ranked_lists.append(high)
+            if low:
+                ranked_lists.append(low)
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures = {}
@@ -381,40 +422,35 @@ class Searcher:
         # RRF merge
         merged = _rrf_merge(ranked_lists, k=RRF_K)
 
-        # Dedup by overlapping timecodes
+        # Dedup
         deduped = _dedup_by_overlap(merged)
 
-        # Reranker: language-aware — RU query vs RU caption, EN query vs EN caption
+        # Reranker
         candidates = deduped[:RERANKER_TOP_K]
 
         if candidates:
-            # Detect query language for reranker passage matching
             query_lang = "ru" if _is_russian(q_main) else "en"
 
-            # Double reranking: score against both RU and EN queries
-            # Take max score to handle bilingual content
             rerank_texts = [_get_rerank_text(c, query_lang) for c in candidates]
-
-            # Primary: rerank with corrected (original language) query
             pairs_main = [[q_main, t] for t in rerank_texts]
             scores_main = self.reranker.compute_score(pairs_main)
             if isinstance(scores_main, (int, float)):
                 scores_main = [scores_main]
 
-            # Secondary: if EN translation available, also rerank with it
             if q_en and q_en.strip().lower() != q_main.strip().lower():
                 rerank_texts_en = [_get_rerank_text(c, "en") for c in candidates]
                 pairs_en = [[q_en, t] for t in rerank_texts_en]
                 scores_en = self.reranker.compute_score(pairs_en)
                 if isinstance(scores_en, (int, float)):
                     scores_en = [scores_en]
-
-                # Take max of both language scores
                 final_scores = [max(s1, s2) for s1, s2 in zip(scores_main, scores_en)]
             else:
-                final_scores = scores_main
+                final_scores = list(scores_main) if not isinstance(scores_main, list) else scores_main
 
+            # Boost train_high matches in reranker score
             for cand, score in zip(candidates, final_scores):
+                if cand.get("source") == "train_high":
+                    score = max(score, score + 5.0)  # significant boost
                 cand["reranker_score"] = float(score)
 
             candidates.sort(key=lambda x: x["reranker_score"], reverse=True)
@@ -444,17 +480,15 @@ class Searcher:
         test_csv: Path = TEST_CSV,
         output_csv: Path = WORK_DIR / "submission.csv",
     ) -> Path:
-        """Read test queries, run multi-query search, write submission.csv."""
         test_df = pd.read_csv(test_csv)
         print(f"[search] Processing {len(test_df)} queries from {test_csv}")
 
         rows: list[dict[str, Any]] = []
 
-        for _, row in test_df.iterrows():
+        for i, (_, row) in enumerate(test_df.iterrows()):
             qid = int(row["query_id"])
             query_text = str(row["question"])
 
-            # Use translated data if available
             translated = self._translated.get(qid, {})
             corrected = translated.get("corrected", query_text)
             translated_en = translated.get("translated", "")
@@ -478,6 +512,9 @@ class Searcher:
                     out[f"start_{rank}"] = 0.0
                     out[f"end_{rank}"] = 0.0
             rows.append(out)
+
+            if (i + 1) % 100 == 0:
+                print(f"  [{i+1}/{len(test_df)}] queries processed")
 
         cols = ["query_id"]
         for rank in range(1, FINAL_TOP_N + 1):
