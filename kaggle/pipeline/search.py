@@ -608,7 +608,7 @@ class Searcher:
             reranked = self._batch_rerank(batch)
             all_reranked.extend(reranked)
 
-        # Build submission
+        # Build submission — fill missing slots with last valid result
         rows: list[dict[str, Any]] = []
         for (qid, _, _, _), results in zip(query_data, all_reranked):
             out: dict[str, Any] = {"query_id": qid}
@@ -619,9 +619,11 @@ class Searcher:
                     out[f"start_{rank}"] = round(r["start"], 3)
                     out[f"end_{rank}"] = round(r["end"], 3)
                 else:
-                    out[f"video_file_{rank}"] = ""
-                    out[f"start_{rank}"] = 0.0
-                    out[f"end_{rank}"] = 0.0
+                    # Duplicate last valid result to avoid nulls
+                    last = results[-1] if results else {"video_id": "video_00000000", "start": 0.0, "end": 30.0}
+                    out[f"video_file_{rank}"] = last["video_id"]
+                    out[f"start_{rank}"] = round(last["start"], 3)
+                    out[f"end_{rank}"] = round(last["end"], 3)
             rows.append(out)
 
         cols = ["query_id"]
