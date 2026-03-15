@@ -1,6 +1,6 @@
 # Video RAG — семантический поиск видеофрагментов
 
-**Команда МаLышки** · Master Hackathon ML 2026 · кейс Okko  
+**Команда МаLышки** · Master Hackathon ML 2026 · кейс Okko/Sber  
 [MultiLingual Video Fragment Retrieval Challenge](https://www.kaggle.com/competitions/multi-lingual-video-fragment-retrieval-challenge)
 
 ---
@@ -168,15 +168,17 @@ tar czf indexes.tar.gz \
 | Векторный поиск | FAISS `IndexFlatIP` (CPU) |
 | Реранкер | bge-reranker-v2-m3 (+ LoRA fine-tune) |
 | Препроцессинг запросов | SymSpell (EN) + SAGE T5 (RU, опц.) |
-| GPU | А100 |
+| GPU | H100 (~21 GB VRAM) |
 
 ---
 
-## Переменные окружения
+## Важно: ограничения на данные
 
-| Переменная | Назначение | Обязательна |
-|---|---|---|
-| `PROXY_API_KEY` | Gemini через ProxyAPI | нет (не нужна для базового pipeline) |
+Видео и аудио из датасета соревнования нельзя передавать за пределы сервера. Все компоненты pipeline работают локально:
+
+- `ffmpeg`, `faster-whisper`, `Qwen3-VL-8B` — запускаются на сервере, видео не покидает машину
+- `BGE-M3`, `bge-reranker-v2-m3` — локальный инференс, нет внешних API-вызовов
+- Поиск на инференсе — только текстовые запросы, видео не участвуют
 
 ---
 
