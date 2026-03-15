@@ -366,12 +366,21 @@ class Searcher:
     # -- Expand to ±EXPAND_SEC around scene center ---------------------------
 
     EXPAND_SEC = 15.0  # ±15s around scene center
+    TARGET_DURATION = 30.0  # target segment length
 
     def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Expand result to ±15s around its center, clamped to [0, video_duration]."""
+        """Expand short segments to ±15s. Keep long segments and train matches as-is."""
         result = result.copy()
         start = result["start"]
         end = result["end"]
+        duration = end - start
+        # Train matches — ground truth, don't touch
+        if result.get("source", "").startswith("train"):
+            return result
+        # Already long enough — keep as-is
+        if duration >= self.TARGET_DURATION:
+            return result
+        # Expand short segments ±15s from center
         center = (start + end) / 2.0
         result["start"] = max(0.0, center - self.EXPAND_SEC)
         result["end"] = center + self.EXPAND_SEC
