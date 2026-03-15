@@ -363,27 +363,115 @@ class Searcher:
             })
         return results
 
-    # -- Expand to ±EXPAND_SEC around scene center ---------------------------
+    # -- Event → scene resolution for precise reranking ----------------------
 
-    EXPAND_SEC = 55.0  # ±55s around scene center → 110s window (teammate config)
-    TARGET_DURATION = 110.0  # target segment length
+    def _resolve_events_to_scenes(
+        self, candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Explode event candidates into constituent scenes for scene-level reranking.
 
-    def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Expand short segments to ±30s. Keep long segments and train matches as-is."""
-        result = result.copy()
-        start = result["start"]
-        end = result["end"]
-        duration = end - start
-        # Train matches — ground truth, don't touch
+        Event summaries are giant blobs — reranker can't focus. Instead, resolve
+        each event to its individual scenes and rerank each scene separately.
+        Scene candidates pass through unchanged.
+        """
+        resolved: list[dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()  # (video_id, scene_idx)
+
+        for cand in candidates:
+            source = cand.get("source", "")
+
+            if "event" in source and "scene_indices" in cand:
+                # Event candidate → explode to constituent scenes
+                for si in cand.get("scene_indices", []):
+                    key = (cand["video_id"], si)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    scene_key = f"{cand['video_id']}__{si}"
+                    scene_doc = self._scene_lookup.get(scene_key)
+                    if scene_doc:
+                        resolved.append({
+                            "video_id": scene_doc["video_id"],
+                            "scene_idx": scene_doc["scene_idx"],
+                            "start": scene_doc["start"],
+                            "end": scene_doc["end"],
+                            "asr_text": scene_doc.get("asr_text", ""),
+                            "llm_caption_en": scene_doc.get("llm_caption_en", ""),
+                            "llm_caption_ru": scene_doc.get("llm_caption_ru", ""),
+                            "summary": scene_doc.get("scene_summary", ""),
+                            "source": source + "_scene",
+                            "rrf_score": cand.get("rrf_score", 0),
+                        })
+            else:
+                # Scene-level candidate — keep as-is
+                si = cand.get("scene_idx", -1)
+                key = (cand["video_id"], si)
+                if key not in seen:
+                    seen.add(key)
+                    resolved.append(cand)
+
+        return resolved
+
+    # -- Adaptive timecode expansion using neighbor reranker scores ----------
+
+    EXPAND_MIN_HALF = 25.0   # minimum ±25s (50s window)
+    EXPAND_MAX_HALF = 55.0   # maximum ±55s (110s window)
+    NEIGHBOR_SCORE_RATIO = 0.3  # include neighbor if score > main * ratio
+
+    def _adaptive_expand(
+        self,
+        result: dict[str, Any],
+        all_scored: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Expand timecodes adaptively: absorb high-scoring neighbors, then pad.
+
+        - Train matches: keep ground-truth timecodes.
+        - Others: greedily extend into adjacent scenes that also scored well,
+          then apply min/max padding.
+        """
         if result.get("source", "").startswith("train"):
             return result
-        # Already long enough — keep as-is
-        if duration >= self.TARGET_DURATION:
-            return result
-        # Expand short segments ±30s from center
+
+        result = result.copy()
+        scene_idx = result.get("scene_idx", -1)
+        vid = result["video_id"]
+        score = result.get("reranker_score", 0.0)
+
+        start = result["start"]
+        end = result["end"]
+
+        if scene_idx >= 0:
+            # Build map of scored scenes for this video
+            vid_scenes: dict[int, dict[str, Any]] = {}
+            for s in all_scored:
+                if s["video_id"] == vid and "scene_idx" in s:
+                    si = s["scene_idx"]
+                    rs = s.get("reranker_score", -999.0)
+                    if si not in vid_scenes or rs > vid_scenes[si].get("reranker_score", -999.0):
+                        vid_scenes[si] = s
+
+            threshold = score * self.NEIGHBOR_SCORE_RATIO
+
+            # Expand left into high-scoring neighbors
+            idx = scene_idx - 1
+            while idx in vid_scenes and vid_scenes[idx].get("reranker_score", -999.0) > threshold:
+                start = min(start, vid_scenes[idx]["start"])
+                idx -= 1
+
+            # Expand right into high-scoring neighbors
+            idx = scene_idx + 1
+            while idx in vid_scenes and vid_scenes[idx].get("reranker_score", -999.0) > threshold:
+                end = max(end, vid_scenes[idx]["end"])
+                idx += 1
+
+        # Apply min/max padding around center
         center = (start + end) / 2.0
-        result["start"] = max(0.0, center - self.EXPAND_SEC)
-        result["end"] = center + self.EXPAND_SEC
+        half_dur = (end - start) / 2.0
+        half_dur = max(half_dur, self.EXPAND_MIN_HALF)
+        half_dur = min(half_dur, self.EXPAND_MAX_HALF)
+
+        result["start"] = max(0.0, center - half_dur)
+        result["end"] = center + half_dur
         return result
 
     # -- Video-level clustering -----------------------------------------------
@@ -496,14 +584,24 @@ class Searcher:
 
         Input: [(q_main, q_en, candidates), ...]
         Output: [reranked_candidates, ...] per query
+
+        Event candidates are first exploded to constituent scenes for
+        precise scene-level reranking instead of matching against the
+        whole event summary blob.
         """
-        # Build flat pair lists with index tracking
+        # Step 1: Resolve events → scenes for precise reranking
+        resolved_qc: list[tuple[str, str, list[dict[str, Any]]]] = []
+        for q_main, q_en, candidates in query_candidates:
+            resolved = self._resolve_events_to_scenes(candidates)
+            resolved_qc.append((q_main, q_en, resolved))
+
+        # Step 2: Build flat pair lists with index tracking
         all_pairs_main: list[list[str]] = []
         all_pairs_en: list[list[str]] = []
         index_map: list[tuple[int, int]] = []  # (query_idx, candidate_idx)
         en_index_map: list[tuple[int, int]] = []  # same but only for EN pairs
 
-        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
+        for qi, (q_main, q_en, candidates) in enumerate(resolved_qc):
             query_lang = "ru" if _is_russian(q_main) else "en"
             use_en = bool(q_en and q_en.strip().lower() != q_main.strip().lower())
 
@@ -519,7 +617,7 @@ class Searcher:
         if not all_pairs_main:
             return [[] for _ in query_candidates]
 
-        # One big reranker call for all pairs
+        # Step 3: One big reranker call for all pairs
         scores_main = self.reranker.compute_score(all_pairs_main)
         if isinstance(scores_main, (int, float)):
             scores_main = [scores_main]
@@ -539,20 +637,21 @@ class Searcher:
             en_score = en_scores.get((qi, ci))
             if en_score is not None:
                 score = max(score, en_score)
-            cand = query_candidates[qi][2][ci]
+            cand = resolved_qc[qi][2][ci]
             if cand.get("source") == "train_high":
                 score = score + 2.0
             cand["reranker_score"] = score
 
-        # Sort, video-cluster, and trim per query
+        # Step 4: Sort, adaptive expand, dedup, cluster per query
         results: list[list[dict[str, Any]]] = []
-        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
+        for qi, (q_main, q_en, candidates) in enumerate(resolved_qc):
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
-            resolved = [self._expand_timecodes(c) for c in top]
-            resolved = _dedup_by_overlap(resolved, iou_threshold=0.3)
+            # Adaptive expansion: absorb high-scoring neighbors, then pad
+            expanded = [self._adaptive_expand(c, candidates) for c in top]
+            expanded = _dedup_by_overlap(expanded, iou_threshold=0.3)
             # Video-level clustering: prefer multiple fragments from top videos
-            final = self._video_cluster(resolved, FINAL_TOP_N)
+            final = self._video_cluster(expanded, FINAL_TOP_N)
             results.append(final)
 
         return results

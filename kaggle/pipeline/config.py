@@ -60,7 +60,7 @@ BGE_BATCH_SIZE = 512
 # ── Reranker ────────────────────────────────────────────────────────────────
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANKER_FINETUNED = WORK_DIR / "reranker_finetuned"
-RERANKER_TOP_K = 20   # входной размер для reranker
+RERANKER_TOP_K = 50   # входной размер для reranker (после event→scene explosion)
 RERANKER_OUTPUT_K = 10  # после reranker
 
 # ── FAISS index ─────────────────────────────────────────────────────────────
