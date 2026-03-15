@@ -24,10 +24,10 @@ Two system variants: **Kaggle** (max metric, H100) and **Business** (inference <
 3b. **step3b_fix_captions** — LLM post-processing (Gemini via ProxyAPI): VLM caption + ASR -> improved bilingual EN+RU descriptions. No GPU needed
 3c. **step3c_doc2query** — LLM synthetic query generation: 4 queries per scene (mixed RU+EN) for better recall. No GPU needed
 4. **step4_scene_docs** — Merge shots + extractions + captions + synthetic queries + train augmentation into scenes.jsonl
-5. **step5_event_docs** — Sliding window (5 scenes, stride 2) for coarse-grained retrieval
-6. **step6_index** — BGE-M3 encode (dense 1024d + sparse lexical) -> FAISS CPU IndexFlatIP + train query index
+5. **step5_event_docs** — Time-based sliding window (w=110s, step=10s) for coarse-grained retrieval
+6. **step6_index** — BGE-M3 encode (dense 1024d + sparse lexical + ColBERT token vectors) -> FAISS CPU IndexFlatIP + train query index + colbert_scenes.pkl
 6b. **step6b_finetune_reranker** — LoRA fine-tune bge-reranker-v2-m3 on train triplets (query, positive scene, hard negative)
-7. **search** — Multi-query (corrected RU + translated EN) × 8 channels (dense + sparse × scenes + events × 2 queries) -> RRF -> language-aware reranker -> ±15s timecode expansion -> top-5
+7. **search** — Multi-query (corrected RU + translated EN) × 10 channels (dense + sparse + ColBERT × scenes + dense + sparse × events × 2 queries) -> RRF fusion (cross-channel score accumulation) -> dedup (IoU>0.3) -> top-50 reranker -> ±55s timecode expansion (cap 180s) -> video clustering -> top-5
 
 **Key data flow:** `shot_boundaries.json` -> `extractions.json` -> `captions.json` -> `scenes.jsonl` -> `events.jsonl` -> FAISS indices
 
@@ -65,16 +65,19 @@ cd business/api && uvicorn api.main:app --reload --port 8000
 
 ## Key Technical Details
 
-- **BGE-M3 encode:** `BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)` returns `{'dense_vecs', 'lexical_weights'}`. Sparse weights are `{int_token_id: float_weight}`, converted to `{str: float}` for storage
+- **BGE-M3 encode:** `BGEM3FlagModel('BAAI/bge-m3', use_fp16=True)` returns `{'dense_vecs', 'lexical_weights', 'colbert_vecs'}`. Sparse weights are `{int_token_id: float_weight}`, converted to `{str: float}` for storage. ColBERT vecs are per-token (n_tokens, 1024), stored as fp16
 - **FlagReranker:** `compute_score([['query', 'passage'], ...])` — batch format is list of pairs. Returns single float for one pair, list for multiple
 - **vLLM multimodal:** `llm.generate({"prompt": ..., "multi_modal_data": {"image": pil_image}})`. Qwen3-VL uses `<|vision_start|><|image_pad|><|vision_end|>` tokens
 - **faster-whisper:** `WhisperModel(model, device="cuda", compute_type="float16")`. `transcribe()` returns `(generator, info)` — segments are lazy, must iterate
 - **FAISS CPU:** `IndexFlatIP` (inner product = cosine for normalized BGE-M3 vectors). CPU-only — faiss-gpu not compiled for H100 sm_90. Three indices: scenes, events, train queries
 - **Sparse search:** dot-product on lexical_weights dicts. No external services needed
-- **Train→test matching:** FAISS cosine sim on train queries. score ≥ 0.85 → inject ground-truth answer with +5.0 reranker boost. score ≥ 0.70 → add to candidate pool
-- **Timecode expansion:** Results expanded ±15s from scene center (median scene is 4s, expected answers 10-30s). Segments already ≥30s kept as-is. Train matches keep ground-truth timecodes
+- **ColBERT search:** MaxSim re-scoring of FAISS scene candidates — for each query token, max cosine sim to any doc token, then sum. Adds 2 RRF channels (scenes × 2 queries)
+- **RRF fusion:** uid = `{video_id}_{start}_{end}` (no source in key) — same document from multiple channels gets accumulated score, not separate entries
+- **Train→test matching:** FAISS cosine sim on train queries. score ≥ 0.92 → inject ground-truth answer with +2.0 reranker boost. score ≥ 0.80 → add to candidate pool
+- **Timecode expansion:** Results expanded ±55s from scene center (110s window). Segments >180s trimmed to 180s centered. Train matches keep ground-truth timecodes
 - **Language-aware reranking:** RU query matched to llm_caption_ru, EN to llm_caption_en. Dual reranking with max(score_ru, score_en)
-- **Batch search pipeline:** Phase 1a: batch BGE-M3 encode all queries. Phase 1b: FAISS+sparse retrieval (cached to retrieval_cache.pkl). Phase 2: batch reranking (32 queries per GPU call)
+- **Batch search pipeline:** Phase 1a: batch BGE-M3 encode all queries. Phase 1b: FAISS+sparse retrieval (cached to retrieval_cache.pkl). Phase 2: batch reranking (32 queries per GPU call). RERANKER_TOP_K=50, RERANKER_OUTPUT_K=10
+- **Video clustering:** After reranking, prefer multiple fragments from top-2 scoring videos to fill top-5 slots
 - **LLM proxy:** Gemini via `google-genai` SDK, base_url `https://api.proxyapi.ru/google`
 - **Business e5 prefix:** indexing uses `"passage: "`, search uses `"query: "` — mismatch breaks retrieval
 - **Business ChromaDB collections:** `clip_visual`, `text_visual`, `text_subtitles`
@@ -91,7 +94,7 @@ cd business/api && uvicorn api.main:app --reload --port 8000
 - `data/frames/` / `KEYFRAMES_DIR` — extracted JPEG frames
 - `data/pipeline/` — local working directory (auto-detected vs /kaggle/working)
 - `data/chroma_db/` — ChromaDB (business version)
-- Working dir outputs: `shot_boundaries.json`, `extractions.json`, `captions.json`, `scenes.jsonl`, `events.jsonl`, `faiss_*.index`, `*_meta.pkl`, `sparse_*.pkl`, `retrieval_cache.pkl`, `translated_data.csv`
+- Working dir outputs: `shot_boundaries.json`, `extractions.json`, `captions.json`, `scenes.jsonl`, `events.jsonl`, `faiss_*.index`, `*_meta.pkl`, `sparse_*.pkl`, `colbert_scenes.pkl`, `retrieval_cache.pkl`, `translated_data.csv`
 
 ## Language
 

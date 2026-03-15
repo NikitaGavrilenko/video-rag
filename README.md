@@ -27,8 +27,8 @@
   → Gemini Flash Lite (API, без GPU):
       ├── step3b: улучшение описаний (EN + RU, query-friendly)
       └── step3c: генерация 4 синтетических поисковых запросов (doc2query)
-  → BGE-M3: кодируем описание в вектор (dense 1024d + sparse)
-  → сохраняем в FAISS индекс (CPU)
+  → BGE-M3: кодируем описание в вектор (dense 1024d + sparse + ColBERT)
+  → сохраняем в FAISS индекс (CPU) + ColBERT vectors (fp16)
   → (опционально) LoRA fine-tune bge-reranker-v2-m3 на train данных
 ```
 
@@ -61,19 +61,22 @@ python -m kaggle.pipeline.step6b_finetune_reranker  # опционально, ~1
       - перевод: corrected_question (RU) + translated_question (EN)
         из translated_data.csv
   → Batch encode: BGE-M3 кодирует все запросы разом (GPU, ~10 сек)
-  → Поиск (параллельно по 8 каналам × 2 языка):
+  → Поиск (10 каналов × 2 языка):
       ├── FAISS dense — сцены (RU + EN)
       ├── FAISS dense — события (RU + EN)
       ├── sparse dot — сцены (RU + EN)
-      └── sparse dot — события (RU + EN)
-  → Train→test matching: если test запрос похож на train (cosine > 0.85),
+      ├── sparse dot — события (RU + EN)
+      └── ColBERT MaxSim — сцены (RU + EN)
+  → Train→test matching: если test запрос похож на train (cosine > 0.92),
     инжектим ground-truth ответ из train
-  → RRF: объединяем все каналы → топ-30
+  → RRF: объединяем все каналы (cross-channel fusion)
+  → Dedup по IoU > 0.3 → топ-50 кандидатов
   → bge-reranker-v2-m3 (language-aware):
       - RU запрос × RU caption + EN запрос × EN caption
       - берём max(score_ru, score_en)
-      - train matches получают +5.0 к score
-  → Расширение таймкодов: ±15с от центра сцены (4с → 30с окно)
+      - train matches получают +2.0 к score
+  → Расширение таймкодов: ±55с от центра (110с окно, cap 180с)
+  → Video clustering: топ-2 видео по сумме score заполняют топ-5
   → submission.csv
 ```
 
