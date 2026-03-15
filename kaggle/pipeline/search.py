@@ -456,20 +456,20 @@ class Searcher:
         all_pairs_main: list[list[str]] = []
         all_pairs_en: list[list[str]] = []
         index_map: list[tuple[int, int]] = []  # (query_idx, candidate_idx)
-        has_en: list[bool] = []
+        en_index_map: list[tuple[int, int]] = []  # same but only for EN pairs
 
         for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             query_lang = "ru" if _is_russian(q_main) else "en"
             use_en = bool(q_en and q_en.strip().lower() != q_main.strip().lower())
-            has_en.append(use_en)
 
             for ci, cand in enumerate(candidates):
                 text_main = _get_rerank_text(cand, query_lang)
                 all_pairs_main.append([q_main, text_main])
+                index_map.append((qi, ci))
                 if use_en:
                     text_en = _get_rerank_text(cand, "en")
                     all_pairs_en.append([q_en, text_en])
-                index_map.append((qi, ci))
+                    en_index_map.append((qi, ci))
 
         if not all_pairs_main:
             return [[] for _ in query_candidates]
@@ -479,20 +479,21 @@ class Searcher:
         if isinstance(scores_main, (int, float)):
             scores_main = [scores_main]
 
-        scores_en_all: list[float] = []
+        # Build EN scores lookup: (qi, ci) -> score
+        en_scores: dict[tuple[int, int], float] = {}
         if all_pairs_en:
             scores_en_raw = self.reranker.compute_score(all_pairs_en)
             if isinstance(scores_en_raw, (int, float)):
                 scores_en_raw = [scores_en_raw]
-            scores_en_all = list(scores_en_raw)
+            for (qi, ci), s in zip(en_index_map, scores_en_raw):
+                en_scores[(qi, ci)] = float(s)
 
         # Distribute scores back to queries
-        en_idx = 0
         for flat_idx, (qi, ci) in enumerate(index_map):
             score = float(scores_main[flat_idx])
-            if has_en[qi] and en_idx < len(scores_en_all):
-                score = max(score, float(scores_en_all[en_idx]))
-                en_idx += 1
+            en_score = en_scores.get((qi, ci))
+            if en_score is not None:
+                score = max(score, en_score)
             cand = query_candidates[qi][2][ci]
             if cand.get("source") == "train_high":
                 score = score + 5.0
