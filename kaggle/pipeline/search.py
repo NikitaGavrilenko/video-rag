@@ -271,6 +271,23 @@ class Searcher:
         sparse_vec: dict[str, float] = {str(k): float(v) for k, v in raw_sparse.items()}
         return {"dense": dense_vec, "sparse": sparse_vec}
 
+    def _encode_queries_batch(self, queries: list[str], batch_size: int = 256) -> list[dict[str, Any]]:
+        """Batch encode all queries at once — much faster than one-by-one."""
+        output = self.bge_model.encode(
+            queries,
+            batch_size=batch_size,
+            return_dense=True,
+            return_sparse=True,
+            return_colbert_vecs=False,
+        )
+        results = []
+        for i in range(len(queries)):
+            dense_vec = output["dense_vecs"][i]
+            raw_sparse = output["lexical_weights"][i]
+            sparse_vec = {str(k): float(v) for k, v in raw_sparse.items()}
+            results.append({"dense": dense_vec, "sparse": sparse_vec})
+        return results
+
     # -- Train→test matching -----------------------------------------------
 
     def _train_match(self, query_vec: np.ndarray) -> list[dict[str, Any]]:
@@ -496,24 +513,78 @@ class Searcher:
         test_df = pd.read_csv(test_csv)
         print(f"[search] Processing {len(test_df)} queries from {test_csv}")
 
-        # Phase 1: Retrieval (FAISS + sparse + RRF) — fast
-        print("[search] Phase 1: Retrieval...")
-        query_data: list[tuple[int, str]] = []  # (qid, query_text)
-        retrieval_results: list[tuple[str, str, list[dict[str, Any]]]] = []
+        # Collect all queries
+        query_data: list[tuple[int, str, str, str]] = []  # (qid, q_main, q_en, raw)
+        all_texts_to_encode: list[str] = []
+        text_index_map: list[tuple[int, str]] = []  # (query_idx, "main"/"en")
 
-        for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="[retrieval]"):
+        for _, row in test_df.iterrows():
             qid = int(row["query_id"])
             query_text = str(row["question"])
             translated = self._translated.get(qid, {})
             corrected = translated.get("corrected", query_text)
             translated_en = translated.get("translated", "")
 
-            q_main, q_en, candidates = self._retrieve(
-                query=query_text,
-                corrected_query=corrected,
-                translated_query=translated_en,
-            )
-            query_data.append((qid, query_text))
+            q_main = corrected or query_text
+            q_en = translated_en or ""
+            qi = len(query_data)
+            query_data.append((qid, q_main, q_en, query_text))
+
+            all_texts_to_encode.append(q_main)
+            text_index_map.append((qi, "main"))
+            if q_en and q_en.strip().lower() != q_main.strip().lower():
+                all_texts_to_encode.append(q_en)
+                text_index_map.append((qi, "en"))
+
+        # Phase 1a: Batch encode all queries on GPU
+        print(f"[search] Phase 1a: Batch encoding {len(all_texts_to_encode)} query texts...")
+        all_encodings = self._encode_queries_batch(all_texts_to_encode)
+
+        # Map encodings back to queries
+        query_encodings: list[list[dict[str, Any]]] = [[] for _ in query_data]
+        for enc, (qi, tag) in zip(all_encodings, text_index_map):
+            query_encodings[qi].append(enc)
+
+        # Phase 1b: Retrieval (FAISS + sparse + RRF)
+        print("[search] Phase 1b: Retrieval...")
+        retrieval_results: list[tuple[str, str, list[dict[str, Any]]]] = []
+
+        for qi, (qid, q_main, q_en, _) in tqdm(enumerate(query_data), total=len(query_data), desc="[retrieval]"):
+            encodings = query_encodings[qi]
+            ranked_lists: list[list[dict[str, Any]]] = []
+
+            # Train→test matching
+            train_matches = self._train_match(encodings[0]["dense"])
+            if train_matches:
+                high = [m for m in train_matches if m["source"] == "train_high"]
+                low = [m for m in train_matches if m["source"] == "train_low"]
+                if high:
+                    ranked_lists.append(high)
+                if low:
+                    ranked_lists.append(low)
+
+            for ei, enc in enumerate(encodings):
+                q_tag = "main" if ei == 0 else "en"
+                ranked_lists.append(self._faiss_dense_search(
+                    self.faiss_scenes, self.scenes_meta,
+                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
+                ))
+                ranked_lists.append(self._faiss_dense_search(
+                    self.faiss_events, self.events_meta,
+                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
+                ))
+                ranked_lists.append(self._sparse_search(
+                    enc["sparse"], self.sparse_scenes, self.scenes_meta,
+                    SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
+                ))
+                ranked_lists.append(self._sparse_search(
+                    enc["sparse"], self.sparse_events, self.events_meta,
+                    SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
+                ))
+
+            merged = _rrf_merge(ranked_lists, k=RRF_K)
+            deduped = _dedup_by_overlap(merged)
+            candidates = deduped[:RERANKER_TOP_K]
             retrieval_results.append((q_main, q_en, candidates))
 
         # Phase 2: Batch reranking — GPU heavy, batched for throughput
