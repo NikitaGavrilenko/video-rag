@@ -365,8 +365,8 @@ class Searcher:
 
     # -- Expand to ±EXPAND_SEC around scene center ---------------------------
 
-    EXPAND_SEC = 30.0  # ±30s around scene center (ground truth median ~59s)
-    TARGET_DURATION = 60.0  # target segment length
+    EXPAND_SEC = 55.0  # ±55s around scene center → 110s window (teammate config)
+    TARGET_DURATION = 110.0  # target segment length
 
     def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
         """Expand short segments to ±30s. Keep long segments and train matches as-is."""
@@ -481,7 +481,7 @@ class Searcher:
             ))
 
         merged = _rrf_merge(ranked_lists, k=RRF_K)
-        deduped = _dedup_by_overlap(merged)
+        deduped = _dedup_by_overlap(merged, iou_threshold=0.3)
         candidates = deduped[:RERANKER_TOP_K]
 
         return q_main, q_en, candidates
@@ -550,7 +550,7 @@ class Searcher:
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
             resolved = [self._expand_timecodes(c) for c in top]
-            resolved = _dedup_by_overlap(resolved)
+            resolved = _dedup_by_overlap(resolved, iou_threshold=0.3)
             # Video-level clustering: prefer multiple fragments from top videos
             final = self._video_cluster(resolved, FINAL_TOP_N)
             results.append(final)
@@ -650,7 +650,7 @@ class Searcher:
                     ))
 
                 merged = _rrf_merge(ranked_lists, k=RRF_K)
-                deduped = _dedup_by_overlap(merged)
+                deduped = _dedup_by_overlap(merged, iou_threshold=0.3)
                 candidates = deduped[:RERANKER_TOP_K]
                 retrieval_results.append((q_main, q_en, candidates))
 
@@ -709,7 +709,7 @@ def main() -> None:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-cache", action="store_true", help="Delete retrieval cache and recompute")
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     if args.no_cache:
         cache = WORK_DIR / "retrieval_cache.pkl"

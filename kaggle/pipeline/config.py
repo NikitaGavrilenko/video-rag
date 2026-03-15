@@ -60,7 +60,7 @@ BGE_BATCH_SIZE = 512
 # ── Reranker ────────────────────────────────────────────────────────────────
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANKER_FINETUNED = WORK_DIR / "reranker_finetuned"
-RERANKER_TOP_K = 100  # входной размер для reranker
+RERANKER_TOP_K = 20   # входной размер для reranker
 RERANKER_OUTPUT_K = 10  # после reranker
 
 # ── FAISS index ─────────────────────────────────────────────────────────────
@@ -74,8 +74,8 @@ BM25_SCENES_FILE = WORK_DIR / "bm25_scenes.pkl"
 BM25_EVENTS_FILE = WORK_DIR / "bm25_events.pkl"
 
 # ── Event documents ─────────────────────────────────────────────────────────
-EVENT_WINDOW_SIZE = 5  # сцен в окне
-EVENT_WINDOW_STRIDE = 2  # шаг скольжения
+EVENT_WINDOW_SEC = 110  # секунд в окне (time-based)
+EVENT_STRIDE_SEC = 10   # шаг скольжения в секундах
 
 # ── Translated queries (pre-corrected + English translations) ──────────────
 TRANSLATED_CSV = WORK_DIR / "translated_data.csv"
