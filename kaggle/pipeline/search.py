@@ -363,19 +363,18 @@ class Searcher:
             })
         return results
 
-    # -- Event -> scene resolution -----------------------------------------
+    # -- Expand to ±EXPAND_SEC around scene center ---------------------------
 
-    def _resolve_event_to_scene(self, result: dict[str, Any]) -> dict[str, Any]:
-        center_idx = result.get("center_scene_idx")
-        if center_idx is None:
-            return result
+    EXPAND_SEC = 15.0  # ±15s around scene center
 
-        key = f"{result['video_id']}__{center_idx}"
-        scene = self._scene_lookup.get(key)
-        if scene:
-            result = result.copy()
-            result["start"] = scene["start"]
-            result["end"] = scene["end"]
+    def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Expand result to ±15s around its center, clamped to [0, video_duration]."""
+        result = result.copy()
+        start = result["start"]
+        end = result["end"]
+        center = (start + end) / 2.0
+        result["start"] = max(0.0, center - self.EXPAND_SEC)
+        result["end"] = center + self.EXPAND_SEC
         return result
 
     # -- Retrieval (no reranker) --------------------------------------------
@@ -495,7 +494,7 @@ class Searcher:
         for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
-            resolved = [self._resolve_event_to_scene(c) for c in top]
+            resolved = [self._expand_timecodes(c) for c in top]
             resolved = _dedup_by_overlap(resolved)
             results.append(resolved[:FINAL_TOP_N])
 
