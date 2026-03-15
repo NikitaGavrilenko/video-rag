@@ -1,8 +1,22 @@
-fastapi
-uvicorn[standard]
+# Kaggle pipeline
+torch
 FlagEmbedding
-faiss-cpu
+faiss-cpu          # на сервере заменить на faiss-gpu-cu12
+vllm
+faster-whisper
+transnetv2-pytorch
+Pillow
 numpy
-pydantic
-symspellpy
 pandas
+tqdm
+opencv-python-headless
+
+# Препроцессинг запросов
+symspellpy
+
+# Fine-tune reranker
+peft
+transformers
+
+# Submission notebook
+rank-bm25

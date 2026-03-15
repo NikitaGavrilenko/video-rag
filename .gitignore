@@ -1,10 +1,12 @@
 # Python
 __pycache__/
 *.pyc
+*.csv
 *.pyo
 .venv/
 venv/
 *.json
+*.jsonl
 *.pkl
 
 # Data (большие файлы)
