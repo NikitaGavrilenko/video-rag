@@ -363,55 +363,6 @@ class Searcher:
             })
         return results
 
-    # -- Event → scene resolution for precise reranking ----------------------
-
-    def _resolve_events_to_scenes(
-        self, candidates: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Explode event candidates into constituent scenes for scene-level reranking.
-
-        Event summaries are giant blobs — reranker can't focus. Instead, resolve
-        each event to its individual scenes and rerank each scene separately.
-        Scene candidates pass through unchanged.
-        """
-        resolved: list[dict[str, Any]] = []
-        seen: set[tuple[str, int]] = set()  # (video_id, scene_idx)
-
-        for cand in candidates:
-            source = cand.get("source", "")
-
-            if "event" in source and "scene_indices" in cand:
-                # Event candidate → explode to constituent scenes
-                for si in cand.get("scene_indices", []):
-                    key = (cand["video_id"], si)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    scene_key = f"{cand['video_id']}__{si}"
-                    scene_doc = self._scene_lookup.get(scene_key)
-                    if scene_doc:
-                        resolved.append({
-                            "video_id": scene_doc["video_id"],
-                            "scene_idx": scene_doc["scene_idx"],
-                            "start": scene_doc["start"],
-                            "end": scene_doc["end"],
-                            "asr_text": scene_doc.get("asr_text", ""),
-                            "llm_caption_en": scene_doc.get("llm_caption_en", ""),
-                            "llm_caption_ru": scene_doc.get("llm_caption_ru", ""),
-                            "summary": scene_doc.get("scene_summary", ""),
-                            "source": source + "_scene",
-                            "rrf_score": cand.get("rrf_score", 0),
-                        })
-            else:
-                # Scene-level candidate — keep as-is
-                si = cand.get("scene_idx", -1)
-                key = (cand["video_id"], si)
-                if key not in seen:
-                    seen.add(key)
-                    resolved.append(cand)
-
-        return resolved
-
     # -- Timecode expansion ±55s, capped at 180s -----------------------------
 
     EXPAND_SEC = 55.0       # ±55s around center → 110s window
@@ -558,24 +509,14 @@ class Searcher:
 
         Input: [(q_main, q_en, candidates), ...]
         Output: [reranked_candidates, ...] per query
-
-        Event candidates are first exploded to constituent scenes for
-        precise scene-level reranking instead of matching against the
-        whole event summary blob.
         """
-        # Step 1: Resolve events → scenes for precise reranking
-        resolved_qc: list[tuple[str, str, list[dict[str, Any]]]] = []
-        for q_main, q_en, candidates in query_candidates:
-            resolved = self._resolve_events_to_scenes(candidates)
-            resolved_qc.append((q_main, q_en, resolved))
-
-        # Step 2: Build flat pair lists with index tracking
+        # Build flat pair lists with index tracking
         all_pairs_main: list[list[str]] = []
         all_pairs_en: list[list[str]] = []
         index_map: list[tuple[int, int]] = []  # (query_idx, candidate_idx)
         en_index_map: list[tuple[int, int]] = []  # same but only for EN pairs
 
-        for qi, (q_main, q_en, candidates) in enumerate(resolved_qc):
+        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             query_lang = "ru" if _is_russian(q_main) else "en"
             use_en = bool(q_en and q_en.strip().lower() != q_main.strip().lower())
 
@@ -591,7 +532,7 @@ class Searcher:
         if not all_pairs_main:
             return [[] for _ in query_candidates]
 
-        # Step 3: One big reranker call for all pairs
+        # One big reranker call for all pairs
         scores_main = self.reranker.compute_score(all_pairs_main)
         if isinstance(scores_main, (int, float)):
             scores_main = [scores_main]
@@ -611,14 +552,14 @@ class Searcher:
             en_score = en_scores.get((qi, ci))
             if en_score is not None:
                 score = max(score, en_score)
-            cand = resolved_qc[qi][2][ci]
+            cand = query_candidates[qi][2][ci]
             if cand.get("source") == "train_high":
                 score = score + 2.0
             cand["reranker_score"] = score
 
-        # Step 4: Sort, adaptive expand, dedup, cluster per query
+        # Sort, expand, dedup, cluster per query
         results: list[list[dict[str, Any]]] = []
-        for qi, (q_main, q_en, candidates) in enumerate(resolved_qc):
+        for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
             expanded = [self._expand_timecodes(c) for c in top]
