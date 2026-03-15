@@ -2,7 +2,7 @@
 
 Решение для соревнования [MultiLingual Video Fragment Retrieval Challenge](https://www.kaggle.com/competitions/multi-lingual-video-fragment-retrieval-challenge), Master Hackathon ML 2026, кейс Okko/Sber.
 
-**Метрика:** Composite Recall Score = avg(SuccessRate@{1,3,5}, VideoRecall@{1,3,5}), IoU ≥ 0.5
+**Метрика:** Composite Recall Score = avg(SuccessRate@{1,3,5}, VideoRecall@{1,3,5}), IoU >= 0.5
 
 ---
 
@@ -20,17 +20,32 @@
 Видео
   → TransNetV2: нарезаем на сцены по смене кадра
   → для каждой сцены параллельно:
-      ├── ffmpeg: вырезаем кадр из середины сцены
-      └── Whisper large-v3: транскрибируем речь в текст
-  → Qwen3-VL-8B: смотрит на кадр + читает транскрипт
-                 → текстовое описание сцены на английском
+      ├── ffmpeg (CPU, 16 потоков): вырезаем кадр из середины сцены
+      └── Whisper large-v3-turbo / transcripts.pkl: транскрибируем речь
+  → Qwen3-VL-8B (vLLM): смотрит на кадр + читает транскрипт
+                        → текстовое описание сцены на английском
+  → Gemini Flash Lite (API, без GPU):
+      ├── step3b: улучшение описаний (EN + RU, query-friendly)
+      └── step3c: генерация 4 синтетических поисковых запросов (doc2query)
   → BGE-M3: кодируем описание в вектор (dense 1024d + sparse)
-  → сохраняем в FAISS индекс + BM25 индекс
+  → сохраняем в FAISS индекс (CPU)
+  → (опционально) LoRA fine-tune bge-reranker-v2-m3 на train данных
 ```
 
 **Запуск:**
 ```bash
+# Полный pipeline (H100)
 python -m kaggle.pipeline.run_pipeline
+
+# LLM пост-обработка (без GPU)
+PROXY_API_KEY=... python -m kaggle.pipeline.step3b_fix_captions --workers 20
+PROXY_API_KEY=... python -m kaggle.pipeline.step3c_doc2query --workers 10
+
+# Пересборка + индексация (GPU для step6+)
+python -m kaggle.pipeline.step4_scene_docs
+python -m kaggle.pipeline.step5_event_docs
+python -m kaggle.pipeline.step6_index
+python -m kaggle.pipeline.step6b_finetune_reranker  # опционально, ~10 мин
 ```
 
 ---
@@ -42,24 +57,31 @@ python -m kaggle.pipeline.run_pipeline
 ```
 Запрос пользователя
   → Препроцессинг:
-      - исправление опечаток и случайных заглавных букв (SymSpell + SAGE T5)
-      - нормализация смешанных раскладок (латиница внутри кириллицы и наоборот)
-      - транслитерация арабских/китайских символов
-      - [TODO] перевод на второй язык (RU→EN или EN→RU),
-               чтобы искать одновременно в русско- и англоязычных описаниях
-  → Поиск (параллельно по 6 каналам):
-      ├── FAISS dense — поиск по векторному сходству (сцены)
-      ├── FAISS dense — то же по событиям (группы из 5 сцен)
-      ├── BM25 — полнотекстовый поиск по ASR транскриптам (сцены)
-      ├── BM25 — то же по событиям
-      ├── sparse dot — поиск по разреженным BGE-M3 весам (сцены)
-      └── sparse dot — то же по событиям
-  → RRF: объединяем результаты всех 6 каналов → топ-50
-  → bge-reranker-v2-m3: переранжируем топ-50 → финальные топ-5
+      - исправление опечаток (SymSpell + SAGE T5)
+      - перевод: corrected_question (RU) + translated_question (EN)
+        из translated_data.csv
+  → Batch encode: BGE-M3 кодирует все запросы разом (GPU, ~10 сек)
+  → Поиск (параллельно по 8 каналам × 2 языка):
+      ├── FAISS dense — сцены (RU + EN)
+      ├── FAISS dense — события (RU + EN)
+      ├── sparse dot — сцены (RU + EN)
+      └── sparse dot — события (RU + EN)
+  → Train→test matching: если test запрос похож на train (cosine > 0.85),
+    инжектим ground-truth ответ из train
+  → RRF: объединяем все каналы → топ-30
+  → bge-reranker-v2-m3 (language-aware):
+      - RU запрос × RU caption + EN запрос × EN caption
+      - берём max(score_ru, score_en)
+      - train matches получают +5.0 к score
+  → Расширение таймкодов: ±15с от центра сцены (4с → 30с окно)
   → submission.csv
 ```
 
-**Запуск:** открыть `kaggle/6_submit.ipynb`, подключить датасет с индексами, Run All.
+**Запуск:**
+```bash
+python -m kaggle.pipeline.search           # с кэшем retrieval
+python -m kaggle.pipeline.search --no-cache # пересчитать retrieval
+```
 
 ---
 
@@ -83,55 +105,61 @@ cd demo && uvicorn api:app --port 8000
 ```
 video-rag/
 ├── kaggle/
-│   ├── pipeline/                # предобработка видео
-│   │   ├── run_pipeline.py      # точка входа
-│   │   ├── step1_shots.py       # нарезка на сцены (TransNetV2)
-│   │   ├── step2_extract.py     # keyframe + ASR (параллельно)
-│   │   ├── step3_vlm_caption.py # описание сцены (Qwen3-VL-8B)
-│   │   ├── step4_scene_docs.py  # сборка scenes.jsonl
-│   │   ├── step5_event_docs.py  # группировка в events.jsonl
-│   │   ├── step6_index.py       # BGE-M3 → FAISS + BM25
-│   │   ├── search.py            # поиск + reranker
-│   │   └── config.py            # пути и константы
-│   └── 6_submit.ipynb           # индексы → submission.csv
+│   ├── pipeline/                    # предобработка видео
+│   │   ├── run_pipeline.py          # точка входа
+│   │   ├── config.py                # пути и константы (auto-detect local/server)
+│   │   ├── step1_shots.py           # нарезка на сцены (TransNetV2)
+│   │   ├── step2_extract.py         # keyframe + ASR (параллельно)
+│   │   ├── step2_3_stream.py        # streaming pipeline (steps 2+3)
+│   │   ├── step3_vlm_caption.py     # описание сцены (Qwen3-VL-8B)
+│   │   ├── step3b_fix_captions.py   # LLM пост-обработка (Gemini API)
+│   │   ├── step3c_doc2query.py      # синтетические запросы (Gemini API)
+│   │   ├── step4_scene_docs.py      # сборка scenes.jsonl
+│   │   ├── step5_event_docs.py      # группировка в events.jsonl
+│   │   ├── step6_index.py           # BGE-M3 → FAISS + train index
+│   │   ├── step6b_finetune_reranker.py  # LoRA fine-tune reranker
+│   │   ├── search.py                # поиск + batch reranker
+│   │   └── retry_failed.py          # пере-обработка пропущенных сцен
+│   └── 6_submit.ipynb               # индексы → submission.csv
 │
 ├── demo/
-│   └── api.py                   # FastAPI для демо-стенда
+│   └── api.py                       # FastAPI для демо-стенда
 │
 ├── business/
 │   └── frontend/
-│       └── okko-demo.html       # UI в стиле Okko
+│       └── okko-demo.html           # UI в стиле Okko
 │
 ├── preproc/
-│   └── query_preprocessor.py   # препроцессинг запросов
+│   └── query_preprocessor.py       # препроцессинг запросов
 │
-└── setup_h100.sh                # настройка окружения
+└── setup_h100.sh                    # настройка окружения
 ```
 
 ---
 
 ## Воспроизведение результата
 
-**1. Запустить предобработку:**
+**1. Запустить предобработку (H100):**
 ```bash
 python -m kaggle.pipeline.run_pipeline
 ```
 
-**2. Упаковать индексы:**
+**2. LLM пост-обработка (без GPU, нужен PROXY_API_KEY):**
 ```bash
-tar czf indexes.tar.gz \
-  /kaggle/working/faiss_scenes.index \
-  /kaggle/working/faiss_events.index \
-  /kaggle/working/scenes_meta.pkl \
-  /kaggle/working/events_meta.pkl \
-  /kaggle/working/sparse_scenes.pkl \
-  /kaggle/working/sparse_events.pkl \
-  /kaggle/working/bm25_scenes.pkl \
-  /kaggle/working/bm25_events.pkl \
-  /kaggle/working/scenes.jsonl \
-  /kaggle/working/events.jsonl
+PROXY_API_KEY=... python -m kaggle.pipeline.step3b_fix_captions --workers 20
+PROXY_API_KEY=... python -m kaggle.pipeline.step3c_doc2query --workers 10
 ```
-Загрузить как Kaggle Dataset с именем `video-rag-indexes`.
 
-**3. Сабмит:**
-`kaggle/6_submit.ipynb` → Add Data → `video-rag-indexes` → Run All → Submit.
+**3. Пересобрать docs + индексы (H100):**
+```bash
+python -m kaggle.pipeline.step4_scene_docs
+python -m kaggle.pipeline.step5_event_docs
+python -m kaggle.pipeline.step6_index
+python -m kaggle.pipeline.step6b_finetune_reranker  # опционально
+python -m kaggle.pipeline.search
+```
+
+**4. Забрать результат:**
+```bash
+scp ubuntu@server:/kaggle/working/submission.csv .
+```
