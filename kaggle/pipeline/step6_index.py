@@ -112,7 +112,7 @@ def _build_train_index(model: BGEM3FlagModel) -> None:
         return
 
     df = pd.read_csv(TRAIN_CSV)
-    required = {"question", "video_file", "start", "end"}
+    required = {"video_file", "start", "end"}
     if not required.issubset(set(df.columns)):
         print(f"[step6] train_qa.csv missing columns {required - set(df.columns)}, skipping")
         return
@@ -122,13 +122,14 @@ def _build_train_index(model: BGEM3FlagModel) -> None:
     train_texts: list[str] = []
 
     for _, row in df.iterrows():
-        question = str(row["question"])
         video_file = str(row["video_file"])
         start = float(row["start"])
         end = float(row["end"])
 
-        # Also include English translation if available
+        # Support both column naming conventions
         question_en = str(row.get("question_en", "")) if pd.notna(row.get("question_en")) else ""
+        question_ru = str(row.get("question_ru", "")) if pd.notna(row.get("question_ru")) else ""
+        question = question_ru or question_en or str(row.get("question", ""))
         combined = question
         if question_en and question_en.lower() != question.lower():
             combined = f"{question} {question_en}"

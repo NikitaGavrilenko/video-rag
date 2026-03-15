@@ -34,8 +34,7 @@ def _load_train_augmentation() -> dict[str, list[str]]:
 
     df = pd.read_csv(TRAIN_CSV)
 
-    # Expect columns: question, video_file, start, end (+ optional question_en)
-    required = {"question", "video_file", "start", "end"}
+    required = {"video_file", "start", "end"}
     if not required.issubset(set(df.columns)):
         print(f"[step4] train_qa.csv missing columns {required - set(df.columns)}, skipping")
         return {}
@@ -55,13 +54,15 @@ def _load_train_augmentation() -> dict[str, list[str]]:
         q_start = float(row["start"])
         q_end = float(row["end"])
 
-        # Collect query texts
+        # Collect query texts (support both column naming conventions)
         queries = []
-        if pd.notna(row.get("question")):
+        if "question_ru" in df.columns and pd.notna(row.get("question_ru")):
+            queries.append(str(row["question_ru"]))
+        elif "question" in df.columns and pd.notna(row.get("question")):
             queries.append(str(row["question"]))
         if "question_en" in df.columns and pd.notna(row.get("question_en")):
             q_en = str(row["question_en"])
-            if q_en != queries[0]:  # avoid duplicate if already English
+            if not queries or q_en.lower() != queries[0].lower():
                 queries.append(q_en)
 
         if not queries:

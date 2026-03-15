@@ -104,13 +104,14 @@ def _build_triplets(
     queries = []
     query_data = []
     for _, row in df.iterrows():
-        q = str(row["question"])
         vid = str(row["video_file"])
         start = float(row["start"])
         end = float(row["end"])
 
-        # Also use English translation if available
+        # Support both column naming conventions
         q_en = str(row.get("question_en", "")) if pd.notna(row.get("question_en")) else ""
+        q_ru = str(row.get("question_ru", "")) if pd.notna(row.get("question_ru")) else ""
+        q = q_ru or q_en or str(row.get("question", ""))
 
         queries.append(q)
         query_data.append({
