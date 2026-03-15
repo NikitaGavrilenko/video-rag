@@ -641,6 +641,17 @@ class Searcher:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-cache", action="store_true", help="Delete retrieval cache and recompute")
+    args = parser.parse_args()
+
+    if args.no_cache:
+        cache = WORK_DIR / "retrieval_cache.pkl"
+        if cache.exists():
+            cache.unlink()
+            print("[search] Deleted retrieval cache")
+
     searcher = Searcher()
     output = searcher.generate_submission()
     print(f"[search] Done. Submission at {output}")
