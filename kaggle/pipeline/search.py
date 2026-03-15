@@ -544,47 +544,59 @@ class Searcher:
         for enc, (qi, tag) in zip(all_encodings, text_index_map):
             query_encodings[qi].append(enc)
 
-        # Phase 1b: Retrieval (FAISS + sparse + RRF)
-        print("[search] Phase 1b: Retrieval...")
+        # Phase 1b: Retrieval (FAISS + sparse + RRF) — with cache
+        retrieval_cache = WORK_DIR / "retrieval_cache.pkl"
         retrieval_results: list[tuple[str, str, list[dict[str, Any]]]] = []
 
-        for qi, (qid, q_main, q_en, _) in tqdm(enumerate(query_data), total=len(query_data), desc="[retrieval]"):
-            encodings = query_encodings[qi]
-            ranked_lists: list[list[dict[str, Any]]] = []
+        if retrieval_cache.exists():
+            print(f"[search] Loading retrieval cache from {retrieval_cache}...")
+            with open(retrieval_cache, "rb") as f:
+                retrieval_results = pickle.load(f)
+            print(f"  Loaded {len(retrieval_results)} cached results")
+        else:
+            print("[search] Phase 1b: Retrieval...")
+            for qi, (qid, q_main, q_en, _) in tqdm(enumerate(query_data), total=len(query_data), desc="[retrieval]"):
+                encodings = query_encodings[qi]
+                ranked_lists: list[list[dict[str, Any]]] = []
 
-            # Train→test matching
-            train_matches = self._train_match(encodings[0]["dense"])
-            if train_matches:
-                high = [m for m in train_matches if m["source"] == "train_high"]
-                low = [m for m in train_matches if m["source"] == "train_low"]
-                if high:
-                    ranked_lists.append(high)
-                if low:
-                    ranked_lists.append(low)
+                # Train→test matching
+                train_matches = self._train_match(encodings[0]["dense"])
+                if train_matches:
+                    high = [m for m in train_matches if m["source"] == "train_high"]
+                    low = [m for m in train_matches if m["source"] == "train_low"]
+                    if high:
+                        ranked_lists.append(high)
+                    if low:
+                        ranked_lists.append(low)
 
-            for ei, enc in enumerate(encodings):
-                q_tag = "main" if ei == 0 else "en"
-                ranked_lists.append(self._faiss_dense_search(
-                    self.faiss_scenes, self.scenes_meta,
-                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
-                ))
-                ranked_lists.append(self._faiss_dense_search(
-                    self.faiss_events, self.events_meta,
-                    enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
-                ))
-                ranked_lists.append(self._sparse_search(
-                    enc["sparse"], self.sparse_scenes, self.scenes_meta,
-                    SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
-                ))
-                ranked_lists.append(self._sparse_search(
-                    enc["sparse"], self.sparse_events, self.events_meta,
-                    SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
-                ))
+                for ei, enc in enumerate(encodings):
+                    q_tag = "main" if ei == 0 else "en"
+                    ranked_lists.append(self._faiss_dense_search(
+                        self.faiss_scenes, self.scenes_meta,
+                        enc["dense"], SEARCH_TOP_K_DENSE, f"dense_scenes_{q_tag}",
+                    ))
+                    ranked_lists.append(self._faiss_dense_search(
+                        self.faiss_events, self.events_meta,
+                        enc["dense"], SEARCH_TOP_K_DENSE, f"dense_events_{q_tag}",
+                    ))
+                    ranked_lists.append(self._sparse_search(
+                        enc["sparse"], self.sparse_scenes, self.scenes_meta,
+                        SEARCH_TOP_K_SPARSE, f"sparse_scenes_{q_tag}",
+                    ))
+                    ranked_lists.append(self._sparse_search(
+                        enc["sparse"], self.sparse_events, self.events_meta,
+                        SEARCH_TOP_K_SPARSE, f"sparse_events_{q_tag}",
+                    ))
 
-            merged = _rrf_merge(ranked_lists, k=RRF_K)
-            deduped = _dedup_by_overlap(merged)
-            candidates = deduped[:RERANKER_TOP_K]
-            retrieval_results.append((q_main, q_en, candidates))
+                merged = _rrf_merge(ranked_lists, k=RRF_K)
+                deduped = _dedup_by_overlap(merged)
+                candidates = deduped[:RERANKER_TOP_K]
+                retrieval_results.append((q_main, q_en, candidates))
+
+            # Save cache
+            with open(retrieval_cache, "wb") as f:
+                pickle.dump(retrieval_results, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"  Saved retrieval cache to {retrieval_cache}")
 
         # Phase 2: Batch reranking — GPU heavy, batched for throughput
         print(f"[search] Phase 2: Batch reranking ({len(retrieval_results)} queries)...")
