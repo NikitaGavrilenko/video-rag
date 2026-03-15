@@ -104,7 +104,7 @@ def _build_triplets(
     queries = []
     query_data = []
     for _, row in df.iterrows():
-        vid = str(row["video_file"])
+        vid = Path(str(row["video_file"])).stem
         start = float(row["start"])
         end = float(row["end"])
 

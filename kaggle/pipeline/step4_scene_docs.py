@@ -50,7 +50,7 @@ def _load_train_augmentation() -> dict[str, list[str]]:
     augmentations: dict[str, list[str]] = defaultdict(list)
 
     for _, row in df.iterrows():
-        video_id = str(row["video_file"])
+        video_id = Path(str(row["video_file"])).stem
         q_start = float(row["start"])
         q_end = float(row["end"])
 

@@ -8,6 +8,7 @@ Also encodes train queries for train→test matching at search time.
 
 import json
 import pickle
+from pathlib import Path
 from typing import Any
 
 import faiss
@@ -122,7 +123,7 @@ def _build_train_index(model: BGEM3FlagModel) -> None:
     train_texts: list[str] = []
 
     for _, row in df.iterrows():
-        video_file = str(row["video_file"])
+        video_file = Path(str(row["video_file"])).stem
         start = float(row["start"])
         end = float(row["end"])
 
