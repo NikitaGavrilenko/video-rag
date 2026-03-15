@@ -1,6 +1,6 @@
 # Video RAG — семантический поиск видеофрагментов
 
-**Команда МаLышки** · Master Hackathon ML 2026 · кейс Okko/Sber  
+**Команда МаLышки** · Master Hackathon ML 2026 · кейс Okko  
 [MultiLingual Video Fragment Retrieval Challenge](https://www.kaggle.com/competitions/multi-lingual-video-fragment-retrieval-challenge)
 
 ---
@@ -168,7 +168,7 @@ tar czf indexes.tar.gz \
 | Векторный поиск | FAISS `IndexFlatIP` (CPU) |
 | Реранкер | bge-reranker-v2-m3 (+ LoRA fine-tune) |
 | Препроцессинг запросов | SymSpell (EN) + SAGE T5 (RU, опц.) |
-| GPU | H100 (~21 GB VRAM) |
+| GPU | А100 |
 
 ---
 
