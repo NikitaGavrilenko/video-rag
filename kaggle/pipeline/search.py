@@ -365,11 +365,11 @@ class Searcher:
 
     # -- Expand to ±EXPAND_SEC around scene center ---------------------------
 
-    EXPAND_SEC = 15.0  # ±15s around scene center
-    TARGET_DURATION = 30.0  # target segment length
+    EXPAND_SEC = 30.0  # ±30s around scene center (ground truth median ~59s)
+    TARGET_DURATION = 60.0  # target segment length
 
     def _expand_timecodes(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Expand short segments to ±15s. Keep long segments and train matches as-is."""
+        """Expand short segments to ±30s. Keep long segments and train matches as-is."""
         result = result.copy()
         start = result["start"]
         end = result["end"]
@@ -380,11 +380,56 @@ class Searcher:
         # Already long enough — keep as-is
         if duration >= self.TARGET_DURATION:
             return result
-        # Expand short segments ±15s from center
+        # Expand short segments ±30s from center
         center = (start + end) / 2.0
         result["start"] = max(0.0, center - self.EXPAND_SEC)
         result["end"] = center + self.EXPAND_SEC
         return result
+
+    # -- Video-level clustering -----------------------------------------------
+
+    def _video_cluster(self, results: list[dict[str, Any]], top_n: int) -> list[dict[str, Any]]:
+        """Prefer multiple fragments from top-scoring videos.
+
+        Strategy: rank videos by sum of reranker scores.
+        Take top-2 videos, fill top_n slots from them.
+        If not enough, fill remaining from other videos.
+        """
+        if len(results) <= top_n:
+            return results
+
+        # Score each video by sum of its candidate scores
+        video_scores: dict[str, float] = defaultdict(float)
+        video_results: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for r in results:
+            vid = r["video_id"]
+            video_scores[vid] += r.get("reranker_score", r.get("rrf_score", 0.0))
+            video_results[vid].append(r)
+
+        # Rank videos by aggregate score
+        ranked_videos = sorted(video_scores.keys(), key=lambda v: video_scores[v], reverse=True)
+
+        # Fill from top-2 videos first, then others
+        final: list[dict[str, Any]] = []
+        top_videos = ranked_videos[:2]
+
+        for vid in top_videos:
+            for r in video_results[vid]:
+                if len(final) >= top_n:
+                    break
+                final.append(r)
+
+        # Fill remaining from other videos
+        if len(final) < top_n:
+            for vid in ranked_videos[2:]:
+                for r in video_results[vid]:
+                    if len(final) >= top_n:
+                        break
+                    final.append(r)
+                if len(final) >= top_n:
+                    break
+
+        return final
 
     # -- Retrieval (no reranker) --------------------------------------------
 
@@ -499,14 +544,16 @@ class Searcher:
                 score = score + 2.0
             cand["reranker_score"] = score
 
-        # Sort and trim per query
+        # Sort, video-cluster, and trim per query
         results: list[list[dict[str, Any]]] = []
         for qi, (q_main, q_en, candidates) in enumerate(query_candidates):
             candidates.sort(key=lambda x: x.get("reranker_score", 0), reverse=True)
             top = candidates[:RERANKER_OUTPUT_K]
             resolved = [self._expand_timecodes(c) for c in top]
             resolved = _dedup_by_overlap(resolved)
-            results.append(resolved[:FINAL_TOP_N])
+            # Video-level clustering: prefer multiple fragments from top videos
+            final = self._video_cluster(resolved, FINAL_TOP_N)
+            results.append(final)
 
         return results
 
